@@ -4,18 +4,93 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width,initial-scale=1" />
 		<title>Boba Maker - Phaser</title>
-		<style>
-			html,body { height:100%; margin:0; font-family: Arial, Helvetica, sans-serif; }
-			#game-container { width:100%; height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(#f7f2ee,#e8f3ff); }
+			<!-- Load an aesthetic font (Poppins) from Google Fonts -->
+			<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet">
+			<style>
+				html,body { height:100%; margin:0; font-family: 'Poppins', Arial, Helvetica, sans-serif; background-image: url('./assets/Background.png'); background-size: cover; background-position: center; background-repeat: no-repeat; }
+				#game-container { position:relative; z-index:1; width:100%; height:100vh; display:flex; align-items:center; justify-content:center; box-sizing:border-box; background: transparent; overflow:hidden; }
+				#game-container canvas { width:100% !important; height:100% !important; display:block; }
+			/* Title background class: uses the user-provided assets/title-A.mp4 */
+			/* .title-bg keeps the image proportional (contain) and centered behind the Phaser canvas */
+
+
+			/* Fullscreen overlay for the title image */
+			#menuOverlay { display:none; position:fixed; left:0; top:0; width:100vw; height:100vh; object-fit:cover; z-index:9999; pointer-events:auto; }
+			/* Enhanced Play button: gradient, float and glow animations */
+			#menuPlayBtn {
+				display:none;
+				position:fixed;
+				z-index:10000;
+				left:50%;
+				top:72%;
+				transform:translate(-50%,-50%);
+				padding:20px 48px;
+				border-radius:14px;
+				border:2px solid rgba(255,255,255,0.14);
+				box-sizing: border-box;
+				background: linear-gradient(135deg, #ffb86b 0%, #ff8b6b 50%, #ff6b9a 100%);
+				color:#fff;
+				font-family:'Poppins',sans-serif;
+				font-weight:800;
+				font-size:24px;
+				letter-spacing:0.6px;
+				cursor:pointer;
+				box-shadow:0 10px 30px rgba(255,107,139,0.18), 0 4px 12px rgba(0,0,0,0.18);
+				transition: transform 220ms cubic-bezier(.2,.9,.2,1), box-shadow 220ms ease, filter 220ms ease;
+				will-change: transform;
+				backface-visibility: hidden;
+				-webkit-font-smoothing: antialiased;
+				animation: floatPlay 3200ms ease-in-out infinite, subtleGlow 1800ms ease-in-out infinite;
+			}
+			/* decorative animated outer border */
+			#menuPlayBtn::after {
+				content: '';
+				position: absolute;
+				left: 50%; top: 50%;
+				transform: translate(-50%, -50%);
+				width: calc(100% + 22px);
+				height: calc(100% + 22px);
+				border-radius: 20px;
+				pointer-events: none;
+				box-shadow: 0 0 0 2px rgba(255,255,255,0.03) inset;
+				transition: box-shadow 260ms ease, transform 260ms ease, opacity 260ms ease;
+				opacity: 0.9;
+			}
+			#menuPlayBtn:hover::after { box-shadow: 0 12px 48px rgba(255,107,139,0.14), 0 0 0 3px rgba(255,255,255,0.06) inset; transform: translate(-50%, -52%); opacity:1; }
+			#menuPlayBtn:hover { transform: translate(-50%,-50%) scale(1.08); box-shadow:0 26px 56px rgba(255,107,139,0.24), 0 8px 22px rgba(0,0,0,0.26); filter:brightness(1.02); }
+
+			@keyframes floatPlay {
+				0% { transform: translate(-50%,-50%) translateY(0px); }
+				50% { transform: translate(-50%,-50%) translateY(-6px); }
+				100% { transform: translate(-50%,-50%) translateY(0px); }
+			}
+
+			@keyframes subtleGlow {
+				0% { box-shadow:0 8px 20px rgba(255,107,139,0.12); }
+				50% { box-shadow:0 18px 36px rgba(255,107,139,0.18); }
+				100% { box-shadow:0 8px 20px rgba(255,107,139,0.12); }
+			}
+
+						@media (max-width:520px) {
+							#menuPlayBtn { padding:14px 28px; font-size:20px; animation: subtleGlow 2200ms ease-in-out infinite; }
+						}
+
+			#menuTitle { display:none; position:fixed; z-index:10000; left:50%; top:8%; transform:translateX(-50%); color:#ffffff; font-family:'Poppins',sans-serif; font-weight:800; font-size:48px; text-shadow:0 6px 18px rgba(0,0,0,0.45); }
 			.credits { position: absolute; left:12px; bottom:8px; font-size:12px; color:#333; }
 		</style>
 	</head>
 	<body>
-		<div id="game-container"></div>
+		<!-- Game container holds the Phaser canvas; overlay, title and Play button are placed inside
+			 so a single border around #game-container encloses both the UI and the overlay image -->
+		<div id="game-container">
+			<video id="menuOverlay" src="./assets/A.mp4" playsinline muted loop autoplay preload="auto" aria-hidden="true"></video>
+			<button id="menuPlayBtn" aria-label="Play">Play</button>
+		</div>
 		<div class="credits">Click size, flavor, then toppings. Press Serve to finish.</div>
 
 		<!-- Phaser from CDN -->
 		<script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
-		<script src="main.js"></script>
+		<script src="./main.js"></script>
+		<audio controls autoplay src=" ./home/qwerty/Downloads/BgSong.ogg">
 	</body>
 </html>
