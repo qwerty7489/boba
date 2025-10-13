@@ -449,14 +449,7 @@ function preload() {
   // special images
   this.load.image('BobaCorp_raw', './assets/BobaCorp.png');
   // background music (place BgSong.ogg in ./assets/)
-  try {  //this.load.audio('bgmusic', './assets/BgSong.ogg'); 
-  // 
- const audio = new Audio('./assets/BgSong.ogg');
- audio.loop = true;
- audio.volume = 0.5;
- audio.play();  
-alert("hi there3");
-
+  try {  this.load.audio('bgmusic', './assets/BgSong.ogg');
 } catch (e) {}
 }
 
@@ -3102,5 +3095,16 @@ function showMoneyLoss(scene, amount) {
     // ignore
   }
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+        const playButton = document.getElementById('menuPlayBtn');
+        const myAudio = document.getElementById('myAudio');
+
+        playButton.addEventListener('click', function() {
+            myAudio.play().catch(error => {
+                console.error("Audio play failed:", error);
+            });
+        });
+    });
 
 window._boba = { reset, selectSize, selectFlavor, addTopping, orderMatchesDrink, removeCustomer, customersEnabled, getMoney: () => money, addMoney: (n) => { money += n; updateMoneyText(); }, startNextDay: (s) => startNextDay(s), getDayNumber: () => dayNumber };
