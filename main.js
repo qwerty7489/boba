@@ -38,6 +38,7 @@ let money = 0;
 let moneyText = null;
 let moneyHudContainer = null;
 let globalActionsContainer = null;
+let collectionPausedDialogue = false;
 let moneyBg = null;
 const moneyHudPadding = 10;
 let dayNumber = 1;
@@ -49,6 +50,8 @@ let dayContainer = null;
 let villainDialogue = null;
 let villainDialogueIndex = 0;
 let villainTalking = false;
+// which avatar imageKey is the owner of the current villainDialogue (so we can cancel if customer changes)
+let villainDialogueOwnerImageKey = null;
 // vertical offset (px) to nudge the money HUD lower from the very top
 const moneyHudOffsetY = -5;
 let currentScreen = 'orders';
@@ -164,7 +167,7 @@ storyCharacters.push({
   { speaker: 'vera', text: 'Maybe… maybe I need to take a break…' },
   { speaker: 'you', text: 'You can. It\'s over. The Compellus shouldn\'t be used to hurt anyone.' },
   { speaker: 'vera', text: '…I understand. This ends here.' },
-  { speaker: 'you', text: 'Everyone\'s safe now. It\'s finally over.', showVideo: 'Better.mp4' }
+  { speaker: 'you', text: 'Everyone\'s safe now. It\'s finally over.', showVideo: 'Better.mp4', }
   ]
 });
 // Add Ian story character (appears day 12)
@@ -250,6 +253,16 @@ storyCharacters.push({
   { speaker: 'carl', text: 'Good. Then maybe this city\'s still got a chance.' }
   ]
 });
+// Add Carl second story (appears day 33)
+storyCharacters.push({
+  key: 'Carl2',
+  imageKey: 'Carl',
+  dialogue: [
+    { speaker: 'carl', text: 'Hey again, was out on patrol and found this lil stray wanderin\' \'round near the shop. Poor thin\' looked lost and hungry, figured ya’d know how ta\' take care of it. Whaddya say — wanna give \'em a home?' },
+    { speaker: 'you', text: 'Oh my gosh, of course! I\'ll make sure to take care of it.' },
+    { speaker: 'carl', text: 'Thanks, glad we have a new friend to liven up this ol\' shop of yers.' }
+  ]
+});
 // Add Liam story character (appears day 21)
 storyCharacters.push({
   key: 'Liam',
@@ -308,6 +321,7 @@ storyCharacters.push({
   ]
 });
 let lastStoryShownDay = 0;
+let lastSpecialShownDay = 0;
 // scrollable maker content containers (populated in create)
 let makerFlavorsContent = null;
 let makerToppingsContent = null;
@@ -352,7 +366,38 @@ CUSTOMER_ASSET_MAP.villain = 'Villain1.png';
   CUSTOMER_ASSET_MAP.Carl = 'Carl.png';
   CUSTOMER_ASSET_MAP.Liam = 'Liam.png';
   CUSTOMER_ASSET_MAP.Gray = 'Gray.png';
-
+  // special character assets
+    CUSTOMER_ASSET_MAP.Lucas = 'Luc.png';
+    CUSTOMER_ASSET_MAP.Caroline = 'cf.png';
+    CUSTOMER_ASSET_MAP.Damon = 'Damon.png';
+    CUSTOMER_ASSET_MAP.Elena = 'Elena.png';
+    CUSTOMER_ASSET_MAP.Stefan = 'Stefan.png';
+    CUSTOMER_ASSET_MAP.Peyton = 'peyt.png';
+    CUSTOMER_ASSET_MAP.Bonnie = 'Bonnie.png';
+    CUSTOMER_ASSET_MAP.Brooke = 'Brooke.png';
+    CUSTOMER_ASSET_MAP.Haley = 'Halez.png';
+    CUSTOMER_ASSET_MAP.Nathan = 'Nath.png';
+    CUSTOMER_ASSET_MAP.Callisto = 'Callisto.png';
+  // collection character assets
+    CUSTOMER_ASSET_MAP.Lucas2 = 'Lucas2.png';
+    CUSTOMER_ASSET_MAP.Caroline2 = 'Caroline2.png';
+    CUSTOMER_ASSET_MAP.Damon2 = 'Damon2.png';
+    CUSTOMER_ASSET_MAP.Elena2 = 'Elena2.png';
+    CUSTOMER_ASSET_MAP.Stefan2 = 'Stefan2.png';
+    CUSTOMER_ASSET_MAP.Peyton2 = 'Peyton2.png';
+    CUSTOMER_ASSET_MAP.Bonnie2 = 'Bonnie2.png';   
+    CUSTOMER_ASSET_MAP.Brooke2 = 'Brooke2.png';
+    CUSTOMER_ASSET_MAP.Haley2 = 'Haley2.png';
+    CUSTOMER_ASSET_MAP.Nathan2 = 'Nathan2.png';
+    CUSTOMER_ASSET_MAP.Callisto2 = 'Callisto2.png';
+    // story collection character assets
+    CUSTOMER_ASSET_MAP.Penelope2 = 'Penel.png';
+    CUSTOMER_ASSET_MAP.Fiona2 = 'Fiona2.png';
+    CUSTOMER_ASSET_MAP.Philip2 = 'Philip2.png';
+    CUSTOMER_ASSET_MAP.Ian2 = 'Ian2.png';
+    CUSTOMER_ASSET_MAP.Debbie2 = 'Debbie2.png';
+    CUSTOMER_ASSET_MAP.Carl2 = 'Carl2.png';
+    CUSTOMER_ASSET_MAP.Liam2 = 'Liam2.png';
 // Orders panel dimensions (adjust to make the orders UI skinnier)
 const ORDERS_PANEL_W = 440;
 const ORDERS_PANEL_H = 480;
@@ -446,11 +491,37 @@ function preload() {
   this.load.image('Carl', './assets/Carl.png');
   this.load.image('Liam', './assets/Liam.png');
   this.load.image('Gray', './assets/Gray.png');
+  // OTH special character images
+  this.load.image('Lucas', './assets/Luc.png');
+  this.load.image('Nathan', './assets/Nath.png');
+  this.load.image('Haley', './assets/Halez.png');
+  this.load.image('Peyton', './assets/peyt.png');
+  this.load.image('Brooke', './assets/Brooke.png');
+  this.load.image('Callisto', './assets/Callisto.png');
+  // OTH collection images
+  this.load.image('Lucas2', './assets/Lucas2.png');
+  this.load.image('Nathan2', './assets/Nathan2.png');
+  this.load.image('Haley2', './assets/Haley2.png');
+  this.load.image('Peyton2', './assets/Peyton2.png');
+  this.load.image('Brooke2', './assets/Brooke2.png');
+  this.load.image('Callisto2', './assets/Callisto2.png');
+  // TVD special character images
+  this.load.image('Stefan', './assets/Stefan.png');
+  this.load.image('Damon', './assets/Damon.png');
+  this.load.image('Elena', './assets/Elena.png');
+  this.load.image('Caroline', './assets/cf.png');
+  this.load.image('Bonnie', './assets/Bonnie.png');
+  // TVD collection images
+  this.load.image('Stefan2', './assets/Stefan2.png');
+  this.load.image('Damon2', './assets/Damon2.png');
+  this.load.image('Elena2', './assets/Elena2.png');
+  this.load.image('Caroline2', './assets/Caroline2.png');
+  this.load.image('Bonnie2', './assets/Bonnie2.png');
   // special images
   this.load.image('BobaCorp_raw', './assets/BobaCorp.png');
+  this.load.image('Thank_You', './assets/Ty.png');
+  this.load.image('Thank_You1', './assets/Ty3.png');
   // background music (place BgSong.ogg in ./assets/)
-  try {  this.load.audio('bgmusic', './assets/BgSong.ogg');
-} catch (e) {}
 }
 
 // Resize and center the HTML background image to match the Phaser game's configured canvas size,
@@ -497,12 +568,14 @@ function create() {
   const scene = this;
   // keep a reference to the active scene for DOM positioning helpers
   try { window._boba_scene = scene; } catch (e) {}
-  // prepare background music object (do not auto-play; will start on user Play button)
+  // start background music if available
   try {
     if (scene && scene.sound) {
       try {
-        if (!window._boba_bgMusic) {
+        // avoid starting multiple times during hot-reload
+        if (!window._boba_bgMusic || !window._boba_bgMusic.isPlaying) {
           window._boba_bgMusic = scene.sound.add('bgmusic', { loop: true, volume: 0.5 });
+          window._boba_bgMusic.play().catch(() => {});
         }
       } catch (e) {}
     }
@@ -889,7 +962,9 @@ function create() {
     const specs = [
       { label: 'Shop', color: 0xffb86b, onClick: () => showShopScreen(scene) },
   { label: 'Make', color: 0x9bd67a, onClick: () => showMakerScreen(scene) },
-      { label: 'Orders', color: 0x5daee8, onClick: () => showOrdersScreen(scene) }
+      { label: 'Orders', color: 0x5daee8, onClick: () => showOrdersScreen(scene) },
+  { label: 'Collection', color: 0xd39be8, onClick: () => showCollectionScreen(scene) },
+  { label: 'Pet', color: 0xf2a6d9, onClick: () => showPetScreen(scene) }
     ];
     const totalW = specs.length * navW + (specs.length - 1) * gap;
     const startX = Math.floor((scene.sys.game.config.width - totalW) / 2);
@@ -983,8 +1058,35 @@ function create() {
   // start with a single active order; force first customer to be the villain image
   activeOrder = generateRandomOrder();
   try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
+    // If this is a 5th day, ensure the first customer uses a special OTH/TVD image
+    try {
+      if (typeof dayNumber === 'number' && dayNumber % 5 === 0 && lastSpecialShownDay !== dayNumber && activeOrder) {
+  const othKeys = ['Lucas','Nathan','Haley','Peyton','Brooke','Callisto'];
+  const tvdKeys = ['Stefan','Damon','Elena','Caroline','Bonnie'];
+        const specialKeys = othKeys.concat(tvdKeys).filter(Boolean);
+        if (specialKeys.length > 0) {
+          // force Halez.png (asset key 'Haley') on Day 35 specifically
+          let pick = null;
+          if (dayNumber === 35) {
+            pick = 'Haley';
+          } else {
+            pick = specialKeys[Phaser.Math.Between(0, specialKeys.length - 1)];
+          }
+          if (pick) {
+            try { activeOrder.appearance = activeOrder.appearance || generateRandomAppearance(); } catch (e) {}
+            activeOrder.appearance.imageKey = pick;
+            try { console.log('create() forced special for first spawn ->', { dayNumber, pick, activeOrderId: activeOrder && activeOrder.id }); } catch (e) {}
+            lastSpecialShownDay = dayNumber;
+          }
+        }
+      }
+    } catch (e) {}
   try {
-    if (activeOrder && activeOrder.appearance) activeOrder.appearance.imageKey = 'villain';
+    // Only force the villain image at initial game start (day 1). If a special image was assigned
+    // above (e.g., day 35), don't override it here.
+    if (dayNumber === 1) {
+      if (activeOrder && activeOrder.appearance) activeOrder.appearance.imageKey = 'villain';
+    }
     // ensure the villain does not actually place an order: clear drinks so after dialogue she won't be served
     try {
       if (activeOrder) {
@@ -997,7 +1099,7 @@ function create() {
   } catch (e) {}
   // Begin villain dialogue sequence (speaker-tagged lines)
   try {
-    setVillainDialogue([
+  setVillainDialogue([
       { speaker: 'narration', text: 'The bell above the door jingles as Vera Chai steps into Boba Dream. The cozy warmth of the shop contrasts sharply with her cold presence. She glances around with a smirk.' },
       { speaker: 'vera', text: 'Oh, don\'t bother. I\'m not here to drink your little cups of sugar. I\'m here to make sure you understand your place.' },
   { speaker: 'narration', text: 'She reaches into her purse and pulls out a glossy, neon-infused photo, sliding it across the counter. The photo shows the BobaCorp flagship store, glowing with a bold sign.', showImage: 'BobaCorp.png' },
@@ -1007,7 +1109,8 @@ function create() {
       { speaker: 'vera', text: 'This is your last warning. Keep dreaming small, or you\'ll regret it. And don\'t think your little charm and nostalgia will save you.' },
       { speaker: 'vera', text: 'Good luck… you’re going to need it.' },
       { speaker: 'narration', text: 'With a flick of her wrist, she turns and exits, the door jingling behind her. You, taking a deep breath, staring at the door, knowing this is only the beginning.' },
-    ], scene);
+  ], scene);
+  try { villainDialogueOwnerImageKey = 'villain'; } catch (e) {}
   } catch (e) {}
   // ensure receipt shows the active order if maker is visible
   updateReceipt(scene, currentOrderInMaker || activeOrder);
@@ -1094,6 +1197,304 @@ function createDayOverlay() {
 
   div.appendChild(card);
   document.body.appendChild(div);
+}
+
+// Collection overlay: full-screen image display for the Collection Book
+function createCollectionOverlay() {
+  if (document.getElementById('collectionOverlay')) return;
+  const div = document.createElement('div');
+  div.id = 'collectionOverlay';
+  div.style.position = 'fixed';
+  div.style.left = '0';
+  div.style.top = '0';
+  div.style.width = '100vw';
+  div.style.height = '100vh';
+  div.style.display = 'none';
+  // place the DOM image behind the Phaser canvas so canvas UI (nav buttons) remains on top
+  // Phaser canvas is set to zIndex ~2000 elsewhere, so use a lower zIndex
+  div.style.zIndex = 1200;
+  div.style.alignItems = 'center';
+  div.style.justifyContent = 'center';
+  div.style.background = '#000';
+  // disable pointer events so clicks go through to the Phaser canvas (nav buttons remain clickable)
+  div.style.pointerEvents = 'none';
+
+  const img = document.createElement('img');
+  img.id = 'collectionOverlayImg';
+  img.src = './assets/Background2.jpeg';
+  img.style.width = '100%';
+  img.style.height = '100%';
+  img.style.objectFit = 'cover';
+  img.style.objectPosition = 'center';
+  img.style.pointerEvents = 'none';
+  div.appendChild(img);
+
+  // Build a centered grid of framed thumbnails for any collection character assets
+  try {
+  const grid = document.createElement('div');
+  grid.id = 'collectionGrid';
+  // position the grid centered over the background (but overlay sits behind the canvas)
+  grid.style.position = 'absolute';
+  // nudge grid a bit to the right
+  grid.style.left = '44%';
+  // center grid horizontally and nudge vertically a bit upward
+  grid.style.top = '45%';
+  grid.style.transform = 'translate(-50%, -50%)';
+  grid.style.width = '80%';
+  grid.style.maxWidth = '1200px';
+  grid.style.boxSizing = 'border-box';
+  grid.style.pointerEvents = 'none';
+  // use CSS grid so we can force two rows and compute columns dynamically
+  grid.style.display = 'grid';
+  // more space between rows for clearer separation
+  grid.style.rowGap = '56px';
+  grid.style.columnGap = '18px';
+  grid.style.justifyItems = 'center';
+  grid.style.alignItems = 'center';
+  // add ample space beneath the grid so it doesn't crowd the bottom nav
+  grid.style.paddingBottom = '120px';
+  // do not allow scrolling; ensure layout fits two rows so nobody is cut off
+  grid.style.maxHeight = 'none';
+  grid.style.overflowY = 'visible';
+
+    // find collection image keys (convention: keys that end with '2')
+    try {
+      let keys = Object.keys(CUSTOMER_ASSET_MAP || {}).filter(k => {
+        const s = String(k || '');
+        // exclude the generic in-game customer2 keys from collection
+        if (/^customer2(_raw)?$/i.test(s)) return false;
+        return /2$/.test(s);
+      });
+      try {
+        // Ensure Penelope2 and Callisto2 occupy the same column (Callisto below Penelope)
+        const penIdx = keys.indexOf('Penelope2');
+        const callIdx = keys.indexOf('Callisto2');
+        if (penIdx !== -1 && callIdx !== -1) {
+          // remove Callisto2 from its current position
+          keys = keys.filter(k => k !== 'Callisto2');
+          // recompute columns based on the new length (two rows desired)
+          const cols = Math.max(1, Math.ceil((keys.length || 0) / 2));
+          // target position directly below Penelope2
+          const target = Math.min(keys.length, penIdx + cols);
+          keys.splice(target, 0, 'Callisto2');
+        }
+      } catch (e) {}
+      try {
+        // Swap Haley2 and Penelope2 positions if both present
+        const hIdx = keys.indexOf('Haley2');
+        const pIdx = keys.indexOf('Penelope2');
+        if (hIdx !== -1 && pIdx !== -1) {
+          const tmp = keys[hIdx];
+          keys[hIdx] = keys[pIdx];
+          keys[pIdx] = tmp;
+        }
+      } catch (e) {}
+  // compute columns so items form two rows (no scrolling)
+  const cols = Math.max(1, Math.ceil((keys.length || 0) / 2));
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.style.gridTemplateRows = 'auto auto';
+      keys.forEach(k => {
+        try {
+          // Use the map directly for Penelope2 and Callisto2 to avoid accidental swaps
+          let fname = CUSTOMER_ASSET_MAP[k];
+          try {
+            if (k === 'Penelope2') {
+              fname = CUSTOMER_ASSET_MAP['Penelope2'];
+            } else if (k === 'Callisto2') {
+              fname = CUSTOMER_ASSET_MAP['Callisto2'];
+            }
+          } catch (e) {}
+          if (!fname) return;
+          const frame = document.createElement('div');
+          frame.className = 'collection-frame';
+          // keep picture sizing generous; make the decorative border thinner
+          frame.style.width = '160px';
+          frame.style.height = '200px';
+          frame.style.display = 'flex';
+          frame.style.alignItems = 'center';
+          frame.style.justifyContent = 'center';
+          frame.style.background = '#fff';
+          frame.style.borderRadius = '12px';
+          frame.style.boxShadow = '0 12px 30px rgba(0,0,0,0.35)';
+          // skinnier uniform border
+          frame.style.borderWidth = '3px';
+          frame.style.borderStyle = 'solid';
+          frame.style.borderColor = '#f8f4f0';
+          // ensure border counts inside frame dimensions for consistent sizing
+          frame.style.boxSizing = 'border-box';
+          frame.style.overflow = 'hidden';
+          frame.style.pointerEvents = 'none';
+
+          const thumb = document.createElement('img');
+          thumb.src = './assets/' + fname;
+          thumb.alt = k;
+          // let the thumbnail occupy most of the frame so reducing the border
+          // doesn't shrink the visible picture
+          thumb.style.maxWidth = '94%';
+          thumb.style.maxHeight = '94%';
+          thumb.style.objectFit = 'contain';
+          thumb.style.pointerEvents = 'none';
+          frame.appendChild(thumb);
+          grid.appendChild(frame);
+        } catch (e) {}
+      });
+    } catch (e) {}
+
+    div.appendChild(grid);
+  } catch (e) {}
+
+  // do not intercept clicks; closing is handled by navigation or hideCollectionScreen()
+  document.body.appendChild(div);
+}
+
+function showCollectionScreen(scene) {
+  try {
+    createCollectionOverlay();
+    const el = document.getElementById('collectionOverlay');
+    if (!el) return;
+    // show only the collection background
+    el.style.display = 'flex';
+    // hide in-canvas UI elements so nothing shows over the background
+    try { if (ordersContainer) ordersContainer.setVisible(false); } catch (e) {}
+    try { if (shopContainer) shopContainer.setVisible(false); } catch (e) {}
+    try { if (uiGroup) uiGroup.getChildren().forEach(ch => ch.setVisible(false)); } catch (e) {}
+    try { if (cupSprites && cupSprites.container) cupSprites.container.setVisible(false); } catch (e) {}
+    try { if (cupSprites && cupSprites.infoText) cupSprites.infoText.setVisible(false); } catch (e) {}
+    try { if (receiptContainer) receiptContainer.setVisible(false); } catch (e) {}
+    try { if (moneyHudContainer) moneyHudContainer.setVisible(false); } catch (e) {}
+    try { if (dayContainer) dayContainer.setVisible(false); } catch (e) {}
+    try { if (globalActionsContainer) globalActionsContainer.setVisible(false); } catch (e) {}
+    // pause any active dialogues (do not fully stop them) and hide DOM customer avatar
+    try {
+      if (villainTalking) {
+        collectionPausedDialogue = true;
+        // hide dialog overlays but keep state so it can resume
+        try {
+          const wrap = document.getElementById('dialogImageOverlayWrap') || document.getElementById('dialogVideoOverlayWrap');
+          if (wrap) wrap.style.display = 'none';
+        } catch (e) {}
+      } else {
+        collectionPausedDialogue = false;
+      }
+    } catch (e) {}
+    try { const d = document.getElementById('domCustomerImg'); if (d) d.style.display = 'none'; } catch (e) {}
+    // prevent new customers or interactions while viewing the collection
+    try { customersEnabled = false; } catch (e) {}
+    // keep navigation buttons clickable (they are separate objects not hidden here)
+  } catch (e) {}
+}
+
+function showPetScreen(scene) {
+  try {
+    // ensure any collection overlay is hidden
+    try { hideCollectionScreen(); } catch (e) {}
+    // create and show a pet overlay (behind the canvas) using Pic.jpeg
+    try { createPetOverlay(); } catch (e) {}
+    try {
+      const el = document.getElementById('petOverlay');
+      if (el) el.style.display = 'flex';
+      // hide in-canvas UI elements so the pet background is visible
+      try { if (ordersContainer) ordersContainer.setVisible(false); } catch (e) {}
+      try { if (shopContainer) shopContainer.setVisible(false); } catch (e) {}
+      try { if (uiGroup) uiGroup.getChildren().forEach(ch => ch.setVisible(false)); } catch (e) {}
+      try { if (cupSprites && cupSprites.container) cupSprites.container.setVisible(false); } catch (e) {}
+      try { if (cupSprites && cupSprites.infoText) cupSprites.infoText.setVisible(false); } catch (e) {}
+      try { if (receiptContainer) receiptContainer.setVisible(false); } catch (e) {}
+      try { if (moneyHudContainer) moneyHudContainer.setVisible(false); } catch (e) {}
+      try { if (dayContainer) dayContainer.setVisible(false); } catch (e) {}
+      try { if (globalActionsContainer) globalActionsContainer.setVisible(false); } catch (e) {}
+      // pause any active dialogues (do not fully stop them) and hide DOM customer avatar
+      try {
+        if (villainTalking) {
+          collectionPausedDialogue = true;
+          try {
+            const wrap = document.getElementById('dialogImageOverlayWrap') || document.getElementById('dialogVideoOverlayWrap');
+            if (wrap) wrap.style.display = 'none';
+          } catch (e) {}
+        } else {
+          collectionPausedDialogue = false;
+        }
+      } catch (e) {}
+      try { const d = document.getElementById('domCustomerImg'); if (d) d.style.display = 'none'; } catch (e) {}
+      // prevent new customers or interactions while viewing the pet screen
+      try { customersEnabled = false; } catch (e) {}
+    } catch (e) {}
+
+    // play hus.mp4 using the dialog video overlay helper (kept after overlay show so audio/video focus is correct)
+    try { showDialogVideo('hus.mp4', () => { /* video finished */ }); } catch (e) {}
+  } catch (e) {}
+}
+
+// Pet overlay: full-screen image display for the Pet UI (uses Pic.jpeg)
+function createPetOverlay() {
+  if (document.getElementById('petOverlay')) return;
+  const div = document.createElement('div');
+  div.id = 'petOverlay';
+  div.style.position = 'fixed';
+  div.style.left = '0';
+  div.style.top = '0';
+  div.style.width = '100vw';
+  div.style.height = '100vh';
+  div.style.display = 'none';
+  // place behind the Phaser canvas so canvas UI remains on top
+  div.style.zIndex = 1200;
+  div.style.alignItems = 'center';
+  div.style.justifyContent = 'center';
+  div.style.background = '#000';
+  div.style.pointerEvents = 'none';
+
+  const img = document.createElement('img');
+  img.id = 'petOverlayImg';
+  img.src = './assets/Pic.jpeg';
+  img.style.width = '100%';
+  img.style.height = '100%';
+  img.style.objectFit = 'cover';
+  img.style.objectPosition = 'center';
+  img.style.pointerEvents = 'none';
+  div.appendChild(img);
+  document.body.appendChild(div);
+}
+
+function hidePetScreen() {
+  try {
+    const el = document.getElementById('petOverlay');
+    if (el) el.style.display = 'none';
+    try { if (dayContainer) dayContainer.setVisible(true); } catch (e) {}
+    try { if (globalActionsContainer) globalActionsContainer.setVisible(true); } catch (e) {}
+    try { if (uiGroup) uiGroup.getChildren().forEach(ch => ch.setVisible(true)); } catch (e) {}
+    try { if (moneyHudContainer) moneyHudContainer.setVisible(true); } catch (e) {}
+    try { if (receiptContainer) receiptContainer.setVisible(true); } catch (e) {}
+    try { if (cupSprites && cupSprites.container) cupSprites.container.setVisible(true); } catch (e) {}
+    try { customersEnabled = true; } catch (e) {}
+    try {
+      if (collectionPausedDialogue && villainTalking) {
+        collectionPausedDialogue = false;
+        try { refreshOrdersUI(window._boba_scene || null); } catch (e) {}
+      }
+    } catch (e) {}
+  } catch (e) {}
+}
+
+function hideCollectionScreen() {
+  try {
+    const el = document.getElementById('collectionOverlay');
+    if (el) el.style.display = 'none';
+  try { if (dayContainer) dayContainer.setVisible(true); } catch (e) {}
+  try { if (globalActionsContainer) globalActionsContainer.setVisible(true); } catch (e) {}
+  try { if (uiGroup) uiGroup.getChildren().forEach(ch => ch.setVisible(true)); } catch (e) {}
+  try { if (moneyHudContainer) moneyHudContainer.setVisible(true); } catch (e) {}
+  try { if (receiptContainer) receiptContainer.setVisible(true); } catch (e) {}
+  try { if (cupSprites && cupSprites.container) cupSprites.container.setVisible(true); } catch (e) {}
+  // allow customers/dialogue to continue; callers (showShop/Make/Orders) will set the appropriate screen visibility
+  try { customersEnabled = true; } catch (e) {}
+  // if dialogue was paused when entering the collection, restore visual overlays and refresh UI
+  try {
+    if (collectionPausedDialogue && villainTalking) {
+      collectionPausedDialogue = false;
+      try { refreshOrdersUI(window._boba_scene || null); } catch (e) {}
+    }
+  } catch (e) {}
+  } catch (e) {}
 }
 
 function showDayOver(scene) {
@@ -1190,14 +1591,6 @@ function showMenuOverlay() {
     try { hideMenuOverlay(); } catch (e) {}
     // ensure scene reference exists and Orders UI is visible, then animate the current customer
     try {
-      // start background music on user interaction (Play)
-      try {
-        if (window._boba_bgMusic && window._boba_bgMusic.play) {
-          try { window._boba_bgMusic.play().catch(() => {}); } catch (e) {}
-        } else if (window._boba_scene && window._boba_scene.sound) {
-          try { window._boba_bgMusic = window._boba_scene.sound.add('bgmusic', { loop: true, volume: 0.5 }); window._boba_bgMusic.play().catch(() => {}); } catch (e) {}
-        }
-      } catch (e) {}
       setTimeout(() => {
         try {
           if (window._boba_scene) {
@@ -1765,15 +2158,18 @@ function generateRandomOrder() {
   if (!sc && dayNumber === 24) sc = storyCharacters.find(s => s.key === 'PenelopeReturn');
   if (!sc && dayNumber === 27) sc = storyCharacters.find(s => s.key === 'Gray');
   if (!sc && dayNumber === 30) sc = storyCharacters.find(s => s.key === 'Villain');
+  if (!sc && dayNumber === 33) sc = storyCharacters.find(s => s.key === 'Carl2');
   if (sc) {
         lastStoryShownDay = dayNumber;
         const order = { id: Phaser.Utils.String.UUID(), drinks: [] };
         order.size = null;
         order.flavor = null;
         order.toppings = [];
-        order.appearance = { ...generateRandomAppearance(), imageKey: sc.imageKey };
-        order._isStory = true;
-        order._storyData = sc;
+  order.appearance = { ...generateRandomAppearance(), imageKey: sc.imageKey };
+  order._isStory = true;
+  order._storyData = sc;
+  // record which day this story order was scheduled for so we only show its dialogue on that day
+  order._scheduledDay = dayNumber;
         return order;
       }
     }
@@ -1818,6 +2214,29 @@ function generateRandomOrder() {
   keys = keys.filter(kk => !storyImageKeys.includes(kk));
   const k = keys[Phaser.Math.Between(0, keys.length - 1)];
   order.appearance.imageKey = k;
+  // every 5 days, replace the image with a random OTH/TVD special character image (but keep it a normal customer)
+  try {
+  if (typeof dayNumber === 'number' && dayNumber % 5 === 0 && lastSpecialShownDay !== dayNumber) {
+  const othKeys = ['Lucas','Nathan','Haley','Peyton','Brooke','Callisto'];
+  const tvdKeys = ['Stefan','Damon','Elena','Caroline','Bonnie','Callisto'];
+      const specialKeys = othKeys.concat(tvdKeys).filter(Boolean);
+      if (specialKeys.length > 0) {
+        // force Halez.png (asset key 'Haley') on Day 35 specifically
+        let pick = null;
+        if (dayNumber === 35) {
+          pick = 'Haley';
+        } else {
+          pick = specialKeys[Phaser.Math.Between(0, specialKeys.length - 1)];
+        }
+        if (pick) {
+          order.appearance.imageKey = pick;
+      try { console.log('generateRandomOrder special pick ->', { dayNumber, pick, orderId: order.id }); } catch (e) {}
+          // mark so we don't repeat for the same day
+          lastSpecialShownDay = dayNumber;
+        }
+      }
+    }
+  } catch (e) {}
   } catch (e) {}
   if (lastCustomerAppearanceId && order.appearance.id === lastCustomerAppearanceId) {
     // try a few times to get a different one
@@ -2011,22 +2430,25 @@ function createOrdersUI(scene) {
   const isIan = (texKey === 'Ian' || texKey === 'ian' || texKey === 'Ia1.png');
   // Debbie should be nudged up a little
   const isDebbie = (texKey === 'Debbie' || texKey === 'debbie' || texKey === 'Debbie.png');
+      // Elena: make slightly larger and move left
+      const isElena = (texKey === 'Elena' || texKey === 'elena' || texKey === 'Elena.png');
   // small adjustments for villain placement (pixels inside Orders panel)
   const villainOffsetX = -260; // move left more
   const villainOffsetY = -120; // move up a little more
   // move non-villain avatars further right so they sit nearer the edge; Fiona sits a bit closer than generic customers
   // position Fiona noticeably more to the left than normal customers so she sits closer to the center
-  const avatarX = isVillain ? (ordersContainer._panelW - 30 + villainOffsetX) : (isFiona ? (ordersContainer._panelW - 100) : (isIan ? (ordersContainer._panelW + 160) : (ordersContainer._panelW + 120)));
+      const avatarX = isVillain ? (ordersContainer._panelW - 30 + villainOffsetX) : (isFiona ? (ordersContainer._panelW - 100) : (isElena ? (ordersContainer._panelW - 60) : (isIan ? (ordersContainer._panelW + 160) : (ordersContainer._panelW + 120))));
       let avatarY = 34;
       if (isVillain) avatarY = 34 + villainOffsetY;
       else if (isDebbie) avatarY = 34 - 18; // move Debbie up a bit
   const avatar = scene.add.image(avatarX, avatarY, texKey).setOrigin(0.5, 0.5);
       try {
     // set avatar initial display size and prepare for appearance animation (fade-in)
-  if (isVillain) avatar.setDisplaySize(200, 200);
-    else if (isFiona) avatar.setDisplaySize(140, 140);
-  else if (isIan) avatar.setDisplaySize(120, 120);
-    else avatar.setDisplaySize(64, 64);
+      if (isVillain) avatar.setDisplaySize(200, 200);
+        else if (isFiona) avatar.setDisplaySize(140, 140);
+      else if (isElena) avatar.setDisplaySize(140, 140);
+      else if (isIan) avatar.setDisplaySize(120, 120);
+        else avatar.setDisplaySize(64, 64);
     avatar.setAlpha(0);
       } catch (e) { try { avatar.setScale(64 / Math.max(1, avatar.width || 64)); } catch (e) {} }
       avatar.setDepth(1500);
@@ -2258,6 +2680,8 @@ function createShopUI(scene) {
 
 function showShopScreen(scene) {
   currentScreen = 'shop';
+  // ensure collection overlay is hidden and restore page background
+  try { hideCollectionScreen(); hidePetScreen(); document.body.style.backgroundImage = "url('./assets/Background.png')"; } catch (e) {}
   shopContainer.setVisible(true);
   ordersContainer.setVisible(false);
   uiGroup.getChildren().forEach(ch => ch.setVisible(false));
@@ -2305,6 +2729,75 @@ function refreshOrdersUI(scene) {
     }
     // reposition DOM customer image for the new activeOrder
     try { positionDomCustomerImg(scene); } catch (e) {}
+    // show a name tag for special, story characters, or the villain (Vera Chai)
+    try {
+      const key = (o && o.appearance && o.appearance.imageKey) ? o.appearance.imageKey : null;
+  const specialKeys = ['Lucas','Nathan','Haley','Peyton','Brooke','Stefan','Damon','Elena','Caroline','Bonnie','Callisto'];
+      const isSpecial = key && specialKeys.indexOf(key) !== -1;
+      const isStoryChar = !!(o && o._isStory);
+      const mustShow = (key === 'villain') || isSpecial || isStoryChar;
+      if (mustShow) {
+        // villain should display as Vera Chai
+        let displayName = '';
+        if (key === 'villain') {
+          displayName = 'Vera Chai';
+        } else if (isStoryChar && o._storyData) {
+          // prefer the story's imageKey (friendly name) if present, fallback to story key
+          displayName = o._storyData.imageKey || o._storyData.key || (key ? String(key) : '');
+        } else {
+          displayName = key ? String(key) : '';
+        }
+        // create a small name-tag (bg + text) if not present
+        try {
+          if (!ordersContainer.nameTag) {
+            const txt = scene.add.text(0, 0, displayName, { font: 'bold 14px Poppins', fill: '#3b2b2b' });
+            // create background based on text size and match bubble color + border
+            const bg = scene.add.graphics();
+            const bgColor = 0xfffbdb; // same as bubble
+            const borderColor = 0xf0d88a; // bubble border
+            bg.fillStyle(bgColor, 1);
+            bg.fillRoundedRect(0, 0, txt.width + 12, txt.height + 8, 6);
+            bg.lineStyle(2, borderColor, 1);
+            bg.strokeRoundedRect(0, 0, txt.width + 12, txt.height + 8, 6);
+            // position text inside bg
+            txt.x = 6; txt.y = 4;
+            const wrap = scene.add.container(0, 0, [bg, txt]);
+            wrap.setDepth(3500);
+            ordersContainer.add(wrap);
+            ordersContainer.nameTag = wrap;
+            ordersContainer.nameTag._bg = bg;
+            ordersContainer.nameTag._txt = txt;
+          } else {
+            // update text and resize background
+            try { ordersContainer.nameTag._txt.setText(displayName); } catch (e) {}
+            try {
+              const w = ordersContainer.nameTag._txt.width + 12;
+              const h = ordersContainer.nameTag._txt.height + 8;
+              const bgColor = 0xfffbdb;
+              const borderColor = 0xf0d88a;
+              ordersContainer.nameTag._bg.clear();
+              ordersContainer.nameTag._bg.fillStyle(bgColor, 1);
+              ordersContainer.nameTag._bg.fillRoundedRect(0, 0, w, h, 6);
+              ordersContainer.nameTag._bg.lineStyle(2, borderColor, 1);
+              ordersContainer.nameTag._bg.strokeRoundedRect(0, 0, w, h, 6);
+            } catch (e) {}
+          }
+          // position above the bubble (centered) and nudge down slightly so it sits closer to the bubble
+          try {
+            const bb = ordersContainer._bubble || { x: 150, y: 100, w: 260, h: 160 };
+            const nt = ordersContainer.nameTag;
+            const nameTagOffsetX = -138; // large left shift
+            const nx = Math.floor(bb.x + Math.max(8, (bb.w - (nt._txt.width + 12)) / 2) + nameTagOffsetX);
+            const nameTagOffsetY = 8; // move the tag down a bit
+            const ny = Math.floor(bb.y - (nt._txt.height + 15) + nameTagOffsetY);
+            nt.x = nx; nt.y = ny;
+            nt.setVisible(true);
+          } catch (e) {}
+        } catch (e) {}
+      } else {
+        try { if (ordersContainer && ordersContainer.nameTag) ordersContainer.nameTag.setVisible(false); } catch (e) {}
+      }
+    } catch (e) {}
     // run appearance animation once per customer AFTER the avatar/DOM have been updated
     try {
       if (o && !o._animated) {
@@ -2314,19 +2807,39 @@ function refreshOrdersUI(scene) {
     } catch (e) {}
     // if this is a story character (appears occasionally), trigger their dialogue sequence
     try {
-      if (o && o._isStory && o._storyData && !o._storyShown) {
+  // only trigger story dialogue for orders that were explicitly scheduled for this day
+  // and whose current avatar actually matches the story character image (prevents regular
+  // customers that happen to use the same portrait from triggering story lines)
+  if (o && o._isStory && o._storyData && !o._storyShown && o._scheduledDay === dayNumber && o.appearance && o.appearance.imageKey === o._storyData.imageKey) {
         try { o._storyShown = true; } catch (e) {}
-        try { setVillainDialogue(o._storyData.dialogue, scene); } catch (e) {}
+        try { setVillainDialogue(o._storyData.dialogue, scene); villainDialogueOwnerImageKey = o.appearance.imageKey || null; } catch (e) {}
       }
     } catch (e) {}
   } catch (e) {}
   // If a dialogue sequence is active, show the current line in the bubble and allow click-to-advance
+  // If a dialogue is active but the activeOrder avatar no longer matches the owner, stop it
+  try {
+    if (villainTalking && villainDialogueOwnerImageKey && (!o || !o.appearance || o.appearance.imageKey !== villainDialogueOwnerImageKey)) {
+      // customer changed while dialog was active — cancel the dialog
+      try { stopVillainDialogue(scene); } catch (e) {}
+    }
+  } catch (e) {}
+
   if (villainTalking && villainDialogue && villainDialogue.length > 0) {
     const raw = villainDialogue[villainDialogueIndex];
     // normalize: allow either string (assume Vera) or object { speaker, text }
     const item = (typeof raw === 'string') ? { speaker: 'vera', text: raw } : (raw || { speaker: 'narration', text: '' });
     const speaker = (item.speaker || '').toLowerCase();
     const text = item.text || '';
+
+    // Hide name tag when the current speaker is 'you' so the player's lines don't show a name tag.
+    try {
+      if (speaker === 'you') {
+        try { if (ordersContainer && ordersContainer.nameTag) ordersContainer.nameTag.setVisible(false); } catch (e) {}
+      } else {
+        try { if (ordersContainer && ordersContainer.nameTag) ordersContainer.nameTag.setVisible(true); } catch (e) {}
+      }
+    } catch (e) {}
 
   // style selection
   let style = { font: 'bold 15px Poppins', fill: '#3b2b2b', align: 'left', wordWrap: { width: 320, useAdvancedWrap: true } };
@@ -2509,10 +3022,40 @@ function setVillainDialogue(lines, scene) {
     villainDialogue = lines.slice();
     villainDialogueIndex = 0;
     villainTalking = true;
+    // by default clear any previous owner; caller may set villainDialogueOwnerImageKey
+    villainDialogueOwnerImageKey = null;
     // ensure Orders screen is shown so the player can click through
     if (scene) showOrdersScreen(scene);
     // refresh to render first line
     try { refreshOrdersUI(scene); } catch (e) {}
+  } catch (e) {}
+}
+
+// Stop any active villain/dialogue sequence and remove overlays
+function stopVillainDialogue(scene) {
+  try {
+    villainDialogue = null;
+    villainDialogueIndex = 0;
+    villainTalking = false;
+    villainDialogueOwnerImageKey = null;
+    // remove any pending dialog overlays
+    try {
+      const wrap = document.getElementById('dialogImageOverlayWrap') || document.getElementById('dialogVideoOverlayWrap');
+      if (wrap) wrap.remove();
+      try { window._boba_pendingDialogImageCallback = null; } catch (e) {}
+      try { window._boba_pendingDialogVideoCallback = null; } catch (e) {}
+      // if a video element is present, pause it
+      try {
+        const vid = document.querySelector('#dialogVideoOverlayWrap video');
+        if (vid) { try { vid.pause(); vid.src = ''; } catch (e) {} }
+      } catch (e) {}
+    } catch (e) {}
+    // restore DOM avatar visibility
+    try { const d = document.getElementById('domCustomerImg'); if (d && currentScreen === 'orders') d.style.display = 'block'; } catch (e) {}
+    // ensure customers can continue
+    customersEnabled = true;
+    // refresh UI
+    try { if (scene) refreshOrdersUI(scene); } catch (e) {}
   } catch (e) {}
 }
 
@@ -2552,10 +3095,36 @@ function advanceVillainDialogue(scene) {
     try {
       const curItem = (typeof cur === 'string') ? { speaker: 'vera', text: cur } : (cur || {});
       if (curItem && curItem.showVideo && !curItem._videoShown) {
-        // show the dialog video and when it finishes, mark as shown and advance the dialogue
+        // show the dialog video and when it finishes, conditionally show Ty images only for Better.mp4
         showDialogVideo(curItem.showVideo, () => {
-          try { curItem._videoShown = true; } catch (e) {}
-          try { advanceVillainDialogue(scene); } catch (e) {}
+          try {
+            const vidName = String(curItem.showVideo || '');
+            if (vidName === 'Better.mp4') {
+              try {
+                showDialogImage('Ty.png', () => {
+                  try {
+                    showDialogImage('Ty3.png', () => {
+                      try { curItem._videoShown = true; } catch (e) {}
+                      try { advanceVillainDialogue(scene); } catch (e) {}
+                    });
+                  } catch (e) {
+                    try { curItem._videoShown = true; } catch (e) {}
+                    try { advanceVillainDialogue(scene); } catch (e) {}
+                  }
+                });
+              } catch (e) {
+                try { curItem._videoShown = true; } catch (e) {}
+                try { advanceVillainDialogue(scene); } catch (e) {}
+              }
+            } else {
+              // default: just advance after video
+              try { curItem._videoShown = true; } catch (e) {}
+              try { advanceVillainDialogue(scene); } catch (e) {}
+            }
+          } catch (e) {
+            try { curItem._videoShown = true; } catch (e) {}
+            try { advanceVillainDialogue(scene); } catch (e) {}
+          }
         });
         return;
       }
@@ -2606,6 +3175,8 @@ function advanceVillainDialogue(scene) {
 
 function showOrdersScreen(scene) {
   currentScreen = 'orders';
+  // ensure collection overlay is hidden and restore page background
+  try { hideCollectionScreen(); hidePetScreen(); document.body.style.backgroundImage = "url('./assets/Background.png')"; } catch (e) {}
   ordersContainer.setVisible(true);
   // hide maker UI (container and controls): we'll hide uiGroup for simplicity
   uiGroup.getChildren().forEach(ch => ch.setVisible(false));
@@ -2619,6 +3190,8 @@ function showOrdersScreen(scene) {
 
 function showMakerScreen(scene) {
   currentScreen = 'maker';
+  // ensure collection overlay is hidden and restore page background
+  try { hideCollectionScreen(); hidePetScreen(); document.body.style.backgroundImage = "url('./assets/Background.png')"; } catch (e) {}
   ordersContainer.setVisible(false);
   uiGroup.getChildren().forEach(ch => ch.setVisible(true));
   cupSprites.container.setVisible(true);
@@ -2777,7 +3350,10 @@ function positionDomCustomerImg(scene) {
           if (fname) src = './assets/' + fname;
         }
       } catch (e) {}
-      if (imgEl.src.indexOf(src) === -1) imgEl.src = src;
+      if (imgEl.src.indexOf(src) === -1) {
+        try { console.log('positionDomCustomerImg setting DOM img src ->', { src, key: activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey, dayNumber }); } catch (e) {}
+        imgEl.src = src;
+      }
       // if villain or story character like Fiona, scale up DOM image and nudge (move up and left)
       try {
         const key = (activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey) ? activeOrder.appearance.imageKey : '';
@@ -2794,6 +3370,83 @@ function positionDomCustomerImg(scene) {
           finalW = Math.floor(w * 1.6);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + fionaDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + fionaDomOffsetY) * scale);
+        } else if (key === 'Elena' || key === 'elena' || key === 'Elena.png') {
+          // Elena: larger and nudged left
+          const elenaDomOffsetX = -160;
+          const elenaDomOffsetY = 0;
+          finalW = Math.floor(w * 1.6);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + elenaDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + elenaDomOffsetY) * scale);
+        } else if (key === 'Caroline' || key === 'caroline' || key === 'cf.png') {
+          // Caroline: larger and nudged left
+          const carolineDomOffsetX = -120;
+          const carolineDomOffsetY = 30;
+          finalW = Math.floor(w * 1.3);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + carolineDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + carolineDomOffsetY) * scale);
+        } else if (key === 'Brooke' || key === 'brooke' || key === 'brooke.png') {
+          // Brooke: larger and nudged left
+          const brookeDomOffsetX = -170;
+          const brookeDomOffsetY = -20;
+          finalW = Math.floor(w * 1.6);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + brookeDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + brookeDomOffsetY) * scale);
+        } else if (key === 'Damon' || key === 'damon' || key === 'damon.png') {
+          // Damon: larger and nudged left
+          const damonDomOffsetX = -150;
+          const damonDomOffsetY = -20;
+          finalW = Math.floor(w * 1.5);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + damonDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + damonDomOffsetY) * scale);
+        } else if (key === 'Stefan' || key === 'stefan' || key === 'Stefan.png') {
+          // Stefan: larger and nudged left
+          const stefanDomOffsetX = -160;
+          const stefanDomOffsetY = -20;
+          finalW = Math.floor(w * 1.6);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + stefanDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + stefanDomOffsetY) * scale);
+        } else if (key === 'Haley' || key === 'haley' || key === 'Halez.png') {
+          // Haley: larger and nudged left
+          const haleyDomOffsetX = -150;
+          const haleyDomOffsetY = -20;
+          finalW = Math.floor(w * 1.6);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + haleyDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + haleyDomOffsetY) * scale);
+        } else if (key === 'Peyton' || key === 'peyton' || key === 'peyt.png') {
+          // Peyton: larger and nudged left
+          const peytonDomOffsetX = -140;
+          const peytonDomOffsetY = -20;
+          finalW = Math.floor(w * 1.4);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + peytonDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + peytonDomOffsetY) * scale);
+        } else if (key === 'Bonnie' || key === 'bonnie' || key === 'Bonnie.png') {
+          // Bonnie: larger and nudged left
+          const bonnieDomOffsetX = -120;
+          const bonnieDomOffsetY = -20;
+          finalW = Math.floor(w * 1.15);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + bonnieDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + bonnieDomOffsetY) * scale);
+        } else if (key === 'Lucas' || key === 'lucas' || key === 'Luc.png') {
+          // Lucas: larger and nudged left
+          const lucasDomOffsetX = -120;
+          const lucasDomOffsetY = -20;
+          finalW = Math.floor(w * 1.2);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + lucasDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + lucasDomOffsetY) * scale);
+        } else if (key === 'Nathan' || key === 'nathan' || key === 'Nath.png') {
+          // Nathan: larger and nudged left
+          const nathanDomOffsetX = -120;
+          const nathanDomOffsetY = -20;
+          finalW = Math.floor(w * 1.4);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + nathanDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + nathanDomOffsetY) * scale);
+        } else if (key === 'Callisto' || key === 'callisto' || key === 'Callisto.png') {
+          // Callisto: larger and nudged left
+          const callistoDomOffsetX = -70;
+          const callistoDomOffsetY = -35;
+          finalW = Math.floor(w * 1.05);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + callistoDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + callistoDomOffsetY) * scale);
         } else if (key === 'Ian' || key === 'ian' || key === 'Ia1.png') {
           // make Ian larger and nudge him to the right slightly
           const ianDomOffsetX = -140; // move right
@@ -2801,13 +3454,6 @@ function positionDomCustomerImg(scene) {
           finalW = Math.floor(w * 1.6);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + ianDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + ianDomOffsetY) * scale);
-        } else if (key === 'Liam' || key === 'liam') {
-          // Make Liam's portrait larger and move it down slightly so it sits lower in the orders panel
-          const liamDomOffsetX = -100; // small rightward nudge
-          const liamDomOffsetY = 20; // move down a bit
-          finalW = Math.floor(w * 1.4);
-          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + liamDomOffsetX) * scale);
-          finalTop = py + Math.floor((domCustomerOffsetY + liamDomOffsetY) * scale);
         } else if (key === 'Debbie' || key === 'debbie' || key === 'Debbie.png') {
           // nudge Debbie's portrait up slightly
           const debbieDomOffsetX = 30;
@@ -2815,6 +3461,13 @@ function positionDomCustomerImg(scene) {
           finalW = Math.floor(w * 0.9);
           finalLeft = px + Math.floor((domCustomerOffsetX + debbieDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + debbieDomOffsetY) * scale);
+        } else if (key === 'Liam' || key === 'liam' || key === 'Liam.png') {
+          // Liam: larger and nudged left
+          const liamDomOffsetX = -140;
+          const liamDomOffsetY = -20;
+          finalW = Math.floor(w * 1.5);
+          finalLeft = px + Math.floor((domCustomerOffsetX + 40 + liamDomOffsetX) * scale);
+          finalTop = py + Math.floor((domCustomerOffsetY + liamDomOffsetY) * scale);
         }
       } catch (e) {}
       imgEl.style.left = finalLeft + 'px';
@@ -2879,7 +3532,15 @@ function showDialogImage(filename, onClick) {
     imgEl.id = 'dialogImageOverlay';
   imgEl.style.display = 'block';
   // shrink the rendered image a little so it reads like a postcard
-  imgEl.style.maxWidth = '56vw';
+  // make Ty images noticeably smaller for emphasis
+  try {
+    const lower = String(filename || '').toLowerCase();
+    if (lower.indexOf('ty') !== -1) {
+      imgEl.style.maxWidth = '28vw';
+    } else {
+      imgEl.style.maxWidth = '56vw';
+    }
+  } catch (e) { imgEl.style.maxWidth = '56vw'; }
     imgEl.style.height = 'auto';
     imgEl.style.cursor = 'pointer';
     imgEl.src = './assets/' + filename;
