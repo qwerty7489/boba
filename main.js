@@ -64,6 +64,30 @@ let makerColRight = null;
 // owned lists control which items appear in the Maker UI (shop purchases add to these)
 let ownedFlavors = [];
 let ownedToppings = [];
+// keys of collection entries the player has met (e.g. 'Penelope2', 'Elena2')
+let collectedCharacters = {};
+
+// Mark a character as collected (imageKey like 'Fiona' -> coll key 'Fiona2')
+function markCharacterCollected(imageKey) {
+  try {
+    if (!imageKey) return;
+    const collKey = String(imageKey) + '2';
+    if (!CUSTOMER_ASSET_MAP || !CUSTOMER_ASSET_MAP[collKey]) return;
+    try { collectedCharacters[collKey] = true; } catch (e) {}
+    // If the collection overlay is currently open, rebuild it so the newly-collected
+    // picture appears immediately.
+    try {
+      const existing = document.getElementById('collectionOverlay');
+      const wasVisible = existing && existing.style && existing.style.display && existing.style.display !== 'none';
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      // recreate the overlay DOM (createCollectionOverlay is idempotent)
+      try { createCollectionOverlay(); } catch (e) {}
+      if (wasVisible) {
+        try { const el = document.getElementById('collectionOverlay'); if (el) el.style.display = 'flex'; } catch (e) {}
+      }
+    } catch (e) {}
+  } catch (e) {}
+}
 // Story characters: appear once every 3 days (alternating) and do not place orders
 let storyCharacters = [
   {
@@ -521,6 +545,8 @@ function preload() {
   this.load.image('BobaCorp_raw', './assets/BobaCorp.png');
   this.load.image('Thank_You', './assets/Ty.png');
   this.load.image('Thank_You1', './assets/Ty3.png');
+  // boba topping image
+  this.load.image('Boba_img', './assets/Boba.png');
   // background music (place BgSong.ogg in ./assets/)
 }
 
@@ -861,11 +887,96 @@ function create() {
     const btn = scene.add.rectangle(90, localY, 160, 36, 0xffffff).setStrokeStyle(2, 0x9b7b7b).setOrigin(0.5,0.5);
   const label = scene.add.text(12, localY - 8, t.key, { font: 'bold 14px Poppins', fill: '#3b2b2b' });
     btn.setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => addTopping(scene, t))
+      .on('pointerdown', () => {
+        try {
+          if (t && t.key === 'Boba') {
+            // spawn two Boba images (use filename key 'Boba.png'); dynamic-load into Phaser if needed
+            const key = 'Boba.png';
+            const createTwo = () => {
+              const left = scene.add.image(-20, 80, key);
+              const right = scene.add.image(20, 80, key);
+              left.setScale(0.14);
+              right.setScale(0.14);
+              left.setDepth(1200);
+              right.setDepth(1200);
+              if (cupSprites && cupSprites.container) {
+                cupSprites.container.add(left);
+                cupSprites.container.add(right);
+              } else {
+                left.x = 300 - 20; left.y = 400;
+                right.x = 300 + 20; right.y = 400;
+              }
+              // persist references so they can be cleared when the drink is served
+              try { cupSprites.extraImages = cupSprites.extraImages || []; cupSprites.extraImages.push(left, right); } catch (e) {}
+            };
+            if (scene.textures && scene.textures.exists && scene.textures.exists(key)) {
+              createTwo();
+            } else {
+              try {
+                const imgEl = new Image();
+                imgEl.crossOrigin = 'anonymous';
+                imgEl.onload = () => {
+                  try { if (scene.textures && scene.textures.addImage) scene.textures.addImage(key, imgEl); createTwo(); } catch (e) { try { showPlainDoubleImage('Boba.png'); } catch (e2) {} }
+                };
+                imgEl.onerror = () => { try { showPlainDoubleImage('Boba.png'); } catch (e) {} };
+                imgEl.src = './assets/Boba.png';
+              } catch (e) { try { showPlainDoubleImage('Boba.png'); } catch (e2) {} }
+            }
+          } else {
+            addTopping(scene, t);
+          }
+        } catch (e) {}
+      })
       .on('pointerover', () => scene.tweens.add({ targets: btn, scale: 1.03, duration: 120 }))
       .on('pointerout', () => scene.tweens.add({ targets: btn, scale: 1.0, duration: 120 }));
     makerToppingsContent.add(btn);
-    makerToppingsContent.add(label);
+    // Replace the textual label with the Boba image for the Boba topping when available
+    try {
+      if (t.key === 'Boba') {
+        // prefer existing Phaser texture
+        if (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img')) {
+          const icon = scene.add.image(12, localY - 8, 'Boba_img');
+          icon.setOrigin(0, 0.5);
+          try { icon.setDisplaySize(28, 28); } catch (e) { icon.setScale(0.32); }
+          makerToppingsContent.add(icon);
+        } else {
+          // attempt to dynamically load the image into Phaser's texture manager
+          try {
+            const imgEl = new Image();
+            imgEl.crossOrigin = 'anonymous';
+            imgEl.src = './assets/Boba.png';
+    imgEl.onload = () => {
+              try {
+                if (scene.textures && scene.textures.addImage) {
+                  try { scene.textures.addImage('Boba_img', imgEl); } catch (e) {}
+                }
+                // create the icon now that the texture exists
+                try {
+      // remove the temporary text label if present
+      try { if (label && label.destroy) label.destroy(); } catch (e) {}
+      const icon2 = scene.add.image(12, localY - 8, 'Boba_img');
+      icon2.setOrigin(0, 0.5);
+      try { icon2.setDisplaySize(28, 28); } catch (e) { icon2.setScale(0.32); }
+      makerToppingsContent.add(icon2);
+                } catch (e) {
+                  makerToppingsContent.add(label);
+                }
+              } catch (e) { makerToppingsContent.add(label); }
+            };
+            imgEl.onerror = () => { makerToppingsContent.add(label); };
+            // meanwhile, add the text label as a temporary fallback which will be replaced when onload runs
+            makerToppingsContent.add(label);
+          } catch (e) {
+            makerToppingsContent.add(label);
+          }
+        }
+      } else {
+        makerToppingsContent.add(label);
+      }
+    } catch (e) {
+      // fallback to text label on any error
+      makerToppingsContent.add(label);
+    }
   });
   // update topping content max scroll
   makerToppingsContent._maxScroll = Math.max(0, ownedToppings.length * makerSlotH - makerToppingsContent._visibleHeight);
@@ -945,6 +1056,8 @@ function create() {
   uiGroup.add(serveLabel);
   serveBtn.on('pointerover', () => scene.tweens.add({ targets: serveBtn, scale: 1.04, duration: 120 }));
   serveBtn.on('pointerout', () => scene.tweens.add({ targets: serveBtn, scale: 1.0, duration: 100 }));
+
+  // ... Show Boba button removed per user request
 
   // Cup drawing container (left side) - moved down to fit inside the smaller panel
   cupSprites.container = scene.add.container(300, 320);
@@ -1120,6 +1233,9 @@ function create() {
   // Start directly with the Orders UI (no title screen)
   showOrdersScreen(scene);
 
+  // Ensure any leftover textual 'Boba' labels in the Maker UI are replaced with the image
+  try { replaceBobaLabelInMaker(scene); } catch (e) {}
+
   // show the Menu.png overlay scaled to the game UI
   try {
     showMenuOverlay();
@@ -1199,6 +1315,82 @@ function createDayOverlay() {
   document.body.appendChild(div);
 }
 
+// Small temporary toast used by pet actions (and other quick feedback)
+function showPetToast(message, duration) {
+  try {
+    duration = typeof duration === 'number' ? duration : 1000;
+    let wrap = document.getElementById('petToastWrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'petToastWrap';
+      wrap.style.position = 'fixed';
+      wrap.style.right = '18px';
+      wrap.style.top = '18px';
+      wrap.style.zIndex = '3200';
+      wrap.style.display = 'flex';
+      wrap.style.flexDirection = 'column';
+      wrap.style.gap = '8px';
+      document.body.appendChild(wrap);
+    }
+    const t = document.createElement('div');
+    t.className = 'pet-toast';
+    t.textContent = message;
+    t.style.background = 'rgba(0,0,0,0.78)';
+    t.style.color = '#fff';
+    t.style.padding = '8px 12px';
+    t.style.borderRadius = '8px';
+    t.style.fontFamily = 'Poppins, sans-serif';
+    t.style.fontSize = '14px';
+    t.style.boxShadow = '0 8px 18px rgba(0,0,0,0.35)';
+    t.style.pointerEvents = 'none';
+    t.style.opacity = '0';
+    t.style.transition = 'opacity 200ms ease, transform 200ms ease';
+    wrap.appendChild(t);
+    // animate in
+    requestAnimationFrame(() => { try { t.style.opacity = '1'; t.style.transform = 'translateY(0)'; } catch (e) {} });
+    setTimeout(() => {
+      try { t.style.opacity = '0'; t.style.transform = 'translateY(-6px)'; } catch (e) {}
+      setTimeout(() => { try { if (t && t.parentNode) t.parentNode.removeChild(t); } catch (e) {} }, 220);
+    }, duration);
+  } catch (e) {}
+}
+
+// Replace any textual 'Boba' labels inside the Maker toppings container with the Boba image.
+function replaceBobaLabelInMaker(scene) {
+  try {
+    if (!makerToppingsContent || !scene || !scene.add) return;
+    // collect text objects that show the label 'Boba'
+    const toRemove = [];
+    makerToppingsContent.list.forEach(child => {
+      try {
+        if (child && child.type === 'Text' && String(child.text || '').trim().toLowerCase() === 'boba') {
+          toRemove.push(child);
+        }
+      } catch (e) {}
+    });
+    if (toRemove.length === 0) return;
+    // if texture exists, create icons at the same positions as the labels
+    const hasTex = (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img'));
+    toRemove.forEach(txt => {
+      try {
+        const x = txt.x; const y = txt.y + 8; // align vertically like labels
+        try { txt.destroy(); } catch (e) {}
+        if (hasTex) {
+          const icon = scene.add.image(x, y, 'Boba_img');
+          icon.setOrigin(0, 0.5);
+          try { icon.setDisplaySize(28, 28); } catch (e) { icon.setScale(0.32); }
+          makerToppingsContent.add(icon);
+        } else {
+          // attempt to load and then replace after loading
+          const imgEl = new Image(); imgEl.crossOrigin = 'anonymous'; imgEl.src = './assets/Boba.png';
+          imgEl.onload = () => { try { if (scene.textures && scene.textures.addImage) scene.textures.addImage('Boba_img', imgEl); const icon2 = scene.add.image(x, y, 'Boba_img'); icon2.setOrigin(0,0.5); try { icon2.setDisplaySize(28,28); } catch (e) { icon2.setScale(0.32); } makerToppingsContent.add(icon2); } catch (e) {}; };
+          imgEl.onerror = () => {};
+        }
+      } catch (e) {}
+    });
+  } catch (e) {}
+}
+
 // Collection overlay: full-screen image display for the Collection Book
 function createCollectionOverlay() {
   if (document.getElementById('collectionOverlay')) return;
@@ -1212,12 +1404,14 @@ function createCollectionOverlay() {
   div.style.display = 'none';
   // place the DOM image behind the Phaser canvas so canvas UI (nav buttons) remains on top
   // Phaser canvas is set to zIndex ~2000 elsewhere, so use a lower zIndex
-  div.style.zIndex = 1200;
+  // place above the Phaser canvas so thumbnails and zoom receive clicks
+  div.style.zIndex = 4000;
   div.style.alignItems = 'center';
   div.style.justifyContent = 'center';
   div.style.background = '#000';
   // disable pointer events so clicks go through to the Phaser canvas (nav buttons remain clickable)
-  div.style.pointerEvents = 'none';
+  // allow pointer events so thumbnails can be clicked to zoom
+  div.style.pointerEvents = 'auto';
 
   const img = document.createElement('img');
   img.id = 'collectionOverlayImg';
@@ -1243,7 +1437,8 @@ function createCollectionOverlay() {
   grid.style.width = '80%';
   grid.style.maxWidth = '1200px';
   grid.style.boxSizing = 'border-box';
-  grid.style.pointerEvents = 'none';
+  // allow clicks on thumbnails
+  grid.style.pointerEvents = 'auto';
   // use CSS grid so we can force two rows and compute columns dynamically
   grid.style.display = 'grid';
   // more space between rows for clearer separation
@@ -1265,6 +1460,25 @@ function createCollectionOverlay() {
         if (/^customer2(_raw)?$/i.test(s)) return false;
         return /2$/.test(s);
       });
+      // filter to only keys the player has collected
+      try { keys = keys.filter(k => Boolean(collectedCharacters && collectedCharacters[k])); } catch (e) {}
+      // If nothing collected yet, insert a placeholder message
+      if (!keys || keys.length === 0) {
+        try {
+          const placeholder = document.createElement('div');
+          placeholder.id = 'collectionPlaceholder';
+          placeholder.style.position = 'absolute';
+          placeholder.style.left = '50%';
+          placeholder.style.top = '50%';
+          placeholder.style.transform = 'translate(-50%, -50%)';
+          placeholder.style.color = '#fff';
+          placeholder.style.font = 'bold 20px Poppins, sans-serif';
+          placeholder.style.textAlign = 'center';
+          placeholder.style.pointerEvents = 'none';
+          placeholder.textContent = 'No characters collected yet. Meet customers to unlock photos.';
+          div.appendChild(placeholder);
+        } catch (e) {}
+      }
       try {
         // Ensure Penelope2 and Callisto2 occupy the same column (Callisto below Penelope)
         const penIdx = keys.indexOf('Penelope2');
@@ -1323,7 +1537,8 @@ function createCollectionOverlay() {
           // ensure border counts inside frame dimensions for consistent sizing
           frame.style.boxSizing = 'border-box';
           frame.style.overflow = 'hidden';
-          frame.style.pointerEvents = 'none';
+          // allow the frame and its child thumbnail to receive pointer events
+          frame.style.pointerEvents = 'auto';
 
           const thumb = document.createElement('img');
           thumb.src = './assets/' + fname;
@@ -1333,7 +1548,48 @@ function createCollectionOverlay() {
           thumb.style.maxWidth = '94%';
           thumb.style.maxHeight = '94%';
           thumb.style.objectFit = 'contain';
-          thumb.style.pointerEvents = 'none';
+          // allow interaction and show a pointer cursor
+          thumb.style.pointerEvents = 'auto';
+          thumb.style.cursor = 'pointer';
+          // clicking the thumbnail opens a fullscreen zoom; clicking the zoom closes it
+          thumb.addEventListener('click', (ev) => {
+            try {
+              ev.stopPropagation();
+              // if a zoom overlay already exists, remove it (toggle behavior)
+              const existing = document.getElementById('collectionZoomWrap');
+              if (existing) {
+                try { existing.remove(); } catch (e) {}
+                return;
+              }
+              const zw = document.createElement('div');
+              zw.id = 'collectionZoomWrap';
+              zw.style.position = 'fixed';
+              zw.style.left = '0';
+              zw.style.top = '0';
+              zw.style.width = '100vw';
+              zw.style.height = '100vh';
+              zw.style.display = 'flex';
+              zw.style.justifyContent = 'center';
+              zw.style.alignItems = 'center';
+              zw.style.background = 'rgba(0,0,0,0.78)';
+              // ensure zoom sits above everything (canvas zIndex ~2000)
+              zw.style.zIndex = '5000';
+              zw.style.cursor = 'pointer';
+              const big = document.createElement('img');
+              big.src = thumb.src;
+              big.alt = thumb.alt || '';
+              big.style.maxWidth = '90%';
+              big.style.maxHeight = '90%';
+              big.style.objectFit = 'contain';
+              big.style.border = '6px solid rgba(255,255,255,0.92)';
+              big.style.borderRadius = '12px';
+              big.style.boxShadow = '0 12px 40px rgba(0,0,0,0.6)';
+              zw.appendChild(big);
+              // clicking the zoom wrapper closes it
+              zw.addEventListener('click', () => { try { zw.remove(); } catch (e) {} });
+              document.body.appendChild(zw);
+            } catch (e) {}
+          });
           frame.appendChild(thumb);
           grid.appendChild(frame);
         } catch (e) {}
@@ -1354,6 +1610,8 @@ function showCollectionScreen(scene) {
     if (!el) return;
     // show only the collection background
     el.style.display = 'flex';
+  // create and show DOM nav so buttons remain above the overlay and clickable
+  try { createDomNavButtons(); const nav = document.getElementById('domNavWrap'); if (nav) nav.style.display = 'flex'; } catch (e) {}
     // hide in-canvas UI elements so nothing shows over the background
     try { if (ordersContainer) ordersContainer.setVisible(false); } catch (e) {}
     try { if (shopContainer) shopContainer.setVisible(false); } catch (e) {}
@@ -1452,6 +1710,100 @@ function createPetOverlay() {
   img.style.objectPosition = 'center';
   img.style.pointerEvents = 'none';
   div.appendChild(img);
+  // Add left-middle action buttons (Play / Feed)
+  try {
+    // allow overlay to receive pointer events for its buttons
+    div.style.pointerEvents = 'auto';
+    // container for the left-side buttons
+    const btnWrap = document.createElement('div');
+    btnWrap.id = 'petActionButtons';
+    btnWrap.style.position = 'fixed';
+    btnWrap.style.left = '18px';
+    btnWrap.style.top = '50%';
+    btnWrap.style.transform = 'translateY(-50%)';
+    btnWrap.style.display = 'flex';
+    btnWrap.style.flexDirection = 'column';
+    btnWrap.style.gap = '12px';
+    btnWrap.style.zIndex = '2600';
+    btnWrap.style.pointerEvents = 'auto';
+
+    const makeBtn = (label, bg, onClick) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.fontFamily = 'Poppins, sans-serif';
+      b.style.padding = '10px 14px';
+      b.style.border = 'none';
+      b.style.borderRadius = '8px';
+      b.style.cursor = 'pointer';
+      b.style.background = bg;
+      b.style.color = '#fff';
+      b.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
+      b.style.pointerEvents = 'auto';
+      b.onclick = onClick;
+      return b;
+    };
+
+    // Play action: animate the pet image with a quick pulse
+    const playBtn = makeBtn('Play', '#5daee8', () => {
+      try {
+        // pulse the pet image for quick feedback
+        const petImg = document.getElementById('petOverlayImg');
+        if (petImg) {
+          petImg.style.transition = 'transform 260ms ease-out';
+          petImg.style.transform = 'scale(1.08)';
+          setTimeout(() => { try { petImg.style.transform = 'scale(1)'; } catch (e) {} }, 260);
+        }
+        showPetToast('Playing...', 900);
+        // use the existing video overlay helper to play Play1.mp4
+        try { showDialogVideo('Play1.mp4', () => {}); } catch (e) {}
+        // attempt to unmute and play the video (user gesture allows unmuted playback in most browsers)
+        try {
+          setTimeout(() => {
+            try {
+              const v = document.getElementById('dialogVideoOverlay');
+              if (v) {
+                v.muted = false;
+                v.play().catch(() => {});
+              }
+            } catch (e) {}
+          }, 60);
+        } catch (e) {}
+      } catch (e) {}
+    });
+
+    // Feed action: increment a small pet-happiness counter and give a tiny money reward
+    const feedBtn = makeBtn('Feed', '#f2a6d9', () => {
+      try {
+        window._pet_happiness = (window._pet_happiness || 0) + 1;
+        // try to update in-game money display if scene helper exists
+        try {
+          if (typeof money === 'number') {
+            money = (typeof money === 'number') ? money + 1 : 1;
+            if (window._boba_scene && typeof updateMoneyText === 'function') updateMoneyText(window._boba_scene);
+          }
+        } catch (e) {}
+        showPetToast('Feeding... +$1', 900);
+        // play the Feeding video overlay
+        try { showDialogVideo('Feeding.mp4', () => {}); } catch (e) {}
+        try {
+          setTimeout(() => {
+            try {
+              const v = document.getElementById('dialogVideoOverlay');
+              if (v) {
+                v.muted = false;
+                v.play().catch(() => {});
+              }
+            } catch (e) {}
+          }, 60);
+        } catch (e) {}
+      } catch (e) {}
+    });
+
+    btnWrap.appendChild(playBtn);
+    btnWrap.appendChild(feedBtn);
+    // ensure the buttons are appended to body so they sit above the canvas
+    document.body.appendChild(btnWrap);
+  } catch (e) {}
   document.body.appendChild(div);
 }
 
@@ -1459,6 +1811,9 @@ function hidePetScreen() {
   try {
     const el = document.getElementById('petOverlay');
     if (el) el.style.display = 'none';
+  // remove left-side pet action buttons if present
+  try { const b = document.getElementById('petActionButtons'); if (b && b.parentNode) b.parentNode.removeChild(b); } catch (e) {}
+  try { const nav = document.getElementById('domNavWrap'); if (nav && nav.parentNode) nav.parentNode.removeChild(nav); } catch (e) {}
     try { if (dayContainer) dayContainer.setVisible(true); } catch (e) {}
     try { if (globalActionsContainer) globalActionsContainer.setVisible(true); } catch (e) {}
     try { if (uiGroup) uiGroup.getChildren().forEach(ch => ch.setVisible(true)); } catch (e) {}
@@ -1479,6 +1834,7 @@ function hideCollectionScreen() {
   try {
     const el = document.getElementById('collectionOverlay');
     if (el) el.style.display = 'none';
+  try { const nav = document.getElementById('domNavWrap'); if (nav && nav.parentNode) nav.parentNode.removeChild(nav); } catch (e) {}
   try { if (dayContainer) dayContainer.setVisible(true); } catch (e) {}
   try { if (globalActionsContainer) globalActionsContainer.setVisible(true); } catch (e) {}
   try { if (uiGroup) uiGroup.getChildren().forEach(ch => ch.setVisible(true)); } catch (e) {}
@@ -1749,7 +2105,45 @@ function addToppingToMaker(scene, item, index) {
     .on('pointerover', () => scene.tweens.add({ targets: btn, scale: 1.03, duration: 120 }))
     .on('pointerout', () => scene.tweens.add({ targets: btn, scale: 1.0, duration: 120 }));
   makerToppingsContent.add(btn);
-  makerToppingsContent.add(label);
+  // Replace textual label with the image when the topping is Boba
+  try {
+    if (item.key === 'Boba') {
+      if (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img')) {
+        const icon = scene.add.image(12, localY - 8, 'Boba_img');
+        icon.setOrigin(0, 0.5);
+        try { icon.setDisplaySize(28, 28); } catch (e) { icon.setScale(0.32); }
+        makerToppingsContent.add(icon);
+      } else {
+        // dynamic load attempt
+        try {
+          const imgEl = new Image();
+          imgEl.crossOrigin = 'anonymous';
+          imgEl.src = './assets/Boba.png';
+      imgEl.onload = () => {
+            try {
+              if (scene.textures && scene.textures.addImage) {
+                try { scene.textures.addImage('Boba_img', imgEl); } catch (e) {}
+              }
+              try {
+        // remove temporary label if present
+        try { if (label && label.destroy) label.destroy(); } catch (e) {}
+        const icon2 = scene.add.image(12, localY - 8, 'Boba_img');
+        icon2.setOrigin(0, 0.5);
+        try { icon2.setDisplaySize(28, 28); } catch (e) { icon2.setScale(0.32); }
+        makerToppingsContent.add(icon2);
+              } catch (e) { makerToppingsContent.add(label); }
+            } catch (e) { makerToppingsContent.add(label); }
+          };
+          imgEl.onerror = () => { makerToppingsContent.add(label); };
+          makerToppingsContent.add(label);
+        } catch (e) { makerToppingsContent.add(label); }
+      }
+    } else {
+      makerToppingsContent.add(label);
+    }
+  } catch (e) {
+    makerToppingsContent.add(label);
+  }
   // refresh max scroll
   makerToppingsContent._maxScroll = Math.max(0, ownedToppings.length * slotH - makerToppingsContent._visibleHeight);
 }
@@ -1788,7 +2182,9 @@ function serveDrink(scene) {
       if (allDone) {
         // completed an entire order
         dayServedCount = (typeof dayServedCount === 'number') ? dayServedCount + 1 : 1;
+  try { markCharacterCollected(parent && parent.appearance && parent.appearance.imageKey); } catch (e) {}
         scene.time.delayedCall(900, () => {
+          try { clearExtraBoba(); } catch (e) {}
           activeOrder = generateRandomOrder();
           refreshOrdersUI(scene);
           showOrdersScreen(scene);
@@ -1834,10 +2230,12 @@ function serveDrink(scene) {
       if (allDone) {
         // completed an entire order
         dayServedCount = (typeof dayServedCount === 'number') ? dayServedCount + 1 : 1;
-        activeOrder = generateRandomOrder();
-        refreshOrdersUI(scene);
-        showOrdersScreen(scene);
-        updateReceipt(scene, null);
+  try { markCharacterCollected(activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey); } catch (e) {}
+  try { clearExtraBoba(); } catch (e) {}
+  activeOrder = generateRandomOrder();
+  refreshOrdersUI(scene);
+  showOrdersScreen(scene);
+  updateReceipt(scene, null);
   try { if (dayServedCount >= 7) { showDayOver(scene); } } catch (e) {}
       } else {
         // still waiting on remaining drinks
@@ -1886,6 +2284,8 @@ function autoCompleteActiveOrder(scene) {
           // if reached day end, show summary overlay
           try { if (dayServedCount >= 7) { showDayOver(scene); return; } } catch (e) {}
           // otherwise spawn next
+          try { markCharacterCollected(parent && parent.appearance && parent.appearance.imageKey); } catch (e) {}
+          try { clearExtraBoba(); } catch (e) {}
           scene.time.delayedCall(700, () => {
             activeOrder = generateRandomOrder();
             try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
@@ -1910,6 +2310,8 @@ function autoCompleteActiveOrder(scene) {
       try { showMoneyGain(scene, total); } catch (e) {}
       // completed an entire order
       dayServedCount = (typeof dayServedCount === 'number') ? dayServedCount + 1 : 1;
+  try { markCharacterCollected(activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey); } catch (e) {}
+      try { clearExtraBoba(); } catch (e) {}
       // if reached day end, show summary overlay
       try { if (dayServedCount >= 7) { showDayOver(scene); return; } } catch (e) {}
       // spawn next customer after a small delay so animations can play
@@ -2081,18 +2483,51 @@ function drawCup(scene) {
     placed.push({ x, y, r: estRadius });
 
     if (t.key === 'Boba') {
+      // Render boba pearls using the preloaded image if available
       const radius = estRadius;
-      const b = scene.add.circle(x, y, radius, t.color).setStrokeStyle(1, 0x241f1f).setAlpha(0.98);
-      const sb = scene.add.ellipse(x - Math.floor(radius * 0.35), y - Math.floor(radius * 0.35), Math.max(3, radius * 0.4), Math.max(2, radius * 0.3), 0xffffff).setAlpha(0.6);
-      c.add(b);
-      c.add(sb);
-      // pop/drop animation for newly placed topping (only animate if newly placed this frame)
-      if (!t._placed) {
-        b.setScale(0.2);
-        scene.tweens.add({ targets: b, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
-        sb.setScale(0.2);
-        scene.tweens.add({ targets: sb, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
-        t._placed = true;
+      try {
+        if (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img')) {
+          const img = scene.add.image(x, y, 'Boba_img');
+          img.setOrigin(0.5);
+          // size the image to roughly match the expected pearl radius
+          let desired = Math.max(6, Math.floor(radius * 2));
+          try {
+            img.setDisplaySize(desired, desired);
+          } catch (e) {
+            // fallback to a small scale
+            try { img.setScale(0.3); } catch (e) {}
+            desired = null;
+          }
+          try { console.log('drawCup: Boba_img texture exists, creating pearl image', { x, y, desired }); } catch (e) {}
+          // add and animate from small -> final display size (use scale tween to 1.0)
+          c.add(img);
+          try { img.setDepth(1800); } catch (e) {}
+          if (!t._placed) {
+            try {
+              img.setScale(0.12);
+              scene.tweens.add({ targets: img, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
+            } catch (e) {
+              try { img.setScale(1.0); } catch (e) {}
+            }
+            t._placed = true;
+          }
+        } else {
+          try { console.log('drawCup: Boba_img texture missing, falling back to circles for boba'); } catch (e) {}
+          // fallback to colored circle if image missing
+          const b = scene.add.circle(x, y, radius, t.color).setStrokeStyle(1, 0x241f1f).setAlpha(0.98);
+          const sb = scene.add.ellipse(x - Math.floor(radius * 0.35), y - Math.floor(radius * 0.35), Math.max(3, radius * 0.4), Math.max(2, radius * 0.3), 0xffffff).setAlpha(0.6);
+          c.add(b);
+          c.add(sb);
+          if (!t._placed) {
+            b.setScale(0.2);
+            scene.tweens.add({ targets: b, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
+            sb.setScale(0.2);
+            scene.tweens.add({ targets: sb, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
+            t._placed = true;
+          }
+        }
+      } catch (e) {
+        // safe fallback
       }
     } else if (t.key === 'Mochi') {
       const w = Math.max(14, cupRadius * 0.14);
@@ -2727,8 +3162,9 @@ function refreshOrdersUI(scene) {
       } catch (e) {}
       try { ordersContainer.avatar.setVisible(currentScreen === 'orders'); } catch (e) {}
     }
-    // reposition DOM customer image for the new activeOrder
-    try { positionDomCustomerImg(scene); } catch (e) {}
+  // reposition DOM customer image for the new activeOrder
+  try { positionDomCustomerImg(scene); } catch (e) {}
+  // NOTE: collection unlocks are handled on order/dialogue completion (not on appearance)
     // show a name tag for special, story characters, or the villain (Vera Chai)
     try {
       const key = (o && o.appearance && o.appearance.imageKey) ? o.appearance.imageKey : null;
@@ -3162,7 +3598,9 @@ function advanceVillainDialogue(scene) {
       villainTalking = false;
       // resume normal customers: enable customers and spawn next one
       customersEnabled = true;
-      activeOrder = generateRandomOrder();
+  // mark the story/dialogue owner as collected when the sequence finishes
+  try { if (villainDialogueOwnerImageKey) { try { markCharacterCollected(villainDialogueOwnerImageKey); } catch (e) {} } } catch (e) {}
+  activeOrder = generateRandomOrder();
       try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
       refreshOrdersUI(scene);
       // also restore DOM avatar visibility
@@ -3310,6 +3748,98 @@ function createDomCustomerImg() {
   document.body.appendChild(img);
 }
 
+// Create a small DOM nav bar that mirrors the in-canvas bottom navigation so
+// navigation remains visible and clickable when DOM overlays (like Collection)
+// sit above the Phaser canvas. This only appears while the Collection UI is open.
+function createDomNavButtons() {
+  if (document.getElementById('domNavWrap')) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'domNavWrap';
+  wrap.style.position = 'fixed';
+  wrap.style.left = '50%';
+  // position a bit higher when buttons are larger
+  wrap.style.bottom = '25px';
+  wrap.style.transform = 'translateX(-50%)';
+  wrap.style.display = 'flex';
+  // match the in-canvas nav spacing
+  wrap.style.gap = '20px';
+  wrap.style.zIndex = '7000';
+  wrap.style.pointerEvents = 'auto';
+  // simple button factory to match existing nav labels
+  const make = (label, bg, fn) => {
+    // outer button container (matches styledButton size)
+    const btn = document.createElement('div');
+    btn.className = 'dom-nav-btn';
+  // make buttons larger to match the bigger nav in other UIs
+  btn.style.width = '300px';
+  btn.style.height = '60px';
+    btn.style.display = 'flex';
+    btn.style.alignItems = 'center';
+    btn.style.justifyContent = 'center';
+    btn.style.position = 'relative';
+    btn.style.boxSizing = 'border-box';
+    btn.style.background = bg;
+    btn.style.borderRadius = '8px';
+    btn.style.border = '2px solid #7a6f6f';
+    btn.style.cursor = 'pointer';
+    btn.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
+    btn.style.overflow = 'hidden';
+    // inner shine (subtle top highlight)
+    const shine = document.createElement('div');
+    shine.style.position = 'absolute';
+  shine.style.left = '8px';
+  shine.style.top = '8px';
+  shine.style.right = '8px';
+  shine.style.height = '22px';
+    shine.style.background = 'rgba(255,255,255,0.12)';
+    shine.style.borderRadius = '6px';
+    shine.style.pointerEvents = 'none';
+    btn.appendChild(shine);
+    // label
+  const span = document.createElement('span');
+  span.textContent = label;
+  // make the label occupy the full button box and vertically center using line-height
+  span.style.display = 'inline-block';
+  span.style.width = '100%';
+  span.style.height = '64px';
+  span.style.lineHeight = '64px';
+  span.style.textAlign = 'center';
+  // match the styledButton typography
+  span.style.fontFamily = 'Poppins, sans-serif';
+  span.style.fontWeight = '700';
+  span.style.fontSize = '14px';
+  span.style.color = '#ffffff';
+  span.style.zIndex = '2';
+  span.style.margin = '0';
+  span.style.padding = '0';
+  btn.appendChild(span);
+    // subtle bottom stripe like the in-canvas nav stripe
+    const stripe = document.createElement('div');
+    stripe.style.position = 'absolute';
+  stripe.style.left = '12px';
+  stripe.style.right = '12px';
+  stripe.style.bottom = '10px';
+  stripe.style.height = '8px';
+    stripe.style.background = 'rgba(255,255,255,0.06)';
+    stripe.style.borderRadius = '4px';
+    stripe.style.zIndex = '1';
+    btn.appendChild(stripe);
+    // click handler
+    btn.addEventListener('click', () => { try { fn(window._boba_scene); } catch (e) {} });
+    // hover effect: slight scale
+    btn.addEventListener('mouseenter', () => { try { btn.style.transform = 'scale(1.04)'; btn.style.transition = 'transform 120ms'; } catch (e) {} });
+    btn.addEventListener('mouseleave', () => { try { btn.style.transform = 'scale(1.0)'; } catch (e) {} });
+    return btn;
+  };
+  // mirror the original colors used in styledButton nav creation
+  wrap.appendChild(make('Shop', '#ffb86b', (s) => showShopScreen(s)));
+  wrap.appendChild(make('Make', '#9bd67a', (s) => showMakerScreen(s)));
+  wrap.appendChild(make('Orders', '#5daee8', (s) => showOrdersScreen(s)));
+  wrap.appendChild(make('Collection', '#d39be8', (s) => showCollectionScreen(s)));
+  wrap.appendChild(make('Pet', '#f2a6d9', (s) => showPetScreen(s)));
+  document.body.appendChild(wrap);
+}
+
 function positionDomCustomerImg(scene) {
   const img = document.getElementById('domCustomerImg');
   if (!img) return;
@@ -3371,10 +3901,10 @@ function positionDomCustomerImg(scene) {
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + fionaDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + fionaDomOffsetY) * scale);
         } else if (key === 'Elena' || key === 'elena' || key === 'Elena.png') {
-          // Elena: larger and nudged left
+          // Elena: lar5ger and nudged left
           const elenaDomOffsetX = -160;
           const elenaDomOffsetY = 0;
-          finalW = Math.floor(w * 1.6);
+          finalW = Math.floor(w * 1.4);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + elenaDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + elenaDomOffsetY) * scale);
         } else if (key === 'Caroline' || key === 'caroline' || key === 'cf.png') {
@@ -3443,7 +3973,7 @@ function positionDomCustomerImg(scene) {
         } else if (key === 'Callisto' || key === 'callisto' || key === 'Callisto.png') {
           // Callisto: larger and nudged left
           const callistoDomOffsetX = -70;
-          const callistoDomOffsetY = -35;
+          const callistoDomOffsetY = -20;
           finalW = Math.floor(w * 1.05);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + callistoDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + callistoDomOffsetY) * scale);
@@ -3573,6 +4103,141 @@ function showDialogImage(filename, onClick) {
     wrap.addEventListener('click', closeHandler, { once: true });
     // also keep image-specific listener as a fallback (still uses closing guard)
     imgEl.addEventListener('click', closeHandler, { once: true });
+  } catch (e) {}
+}
+
+// Show a plain image overlay (no postcard/frame) centered on screen. Clicking closes it.
+function showPlainImage(filename, onClick) {
+  try {
+    if (!filename) return;
+    try { const old = document.getElementById('plainImageOverlay'); if (old) old.remove(); } catch (e) {}
+    const wrap = document.createElement('div');
+    wrap.id = 'plainImageOverlay';
+    wrap.style.position = 'fixed';
+    wrap.style.left = '0';
+    wrap.style.top = '0';
+    wrap.style.width = '100vw';
+    wrap.style.height = '100vh';
+    wrap.style.zIndex = '99999';
+    wrap.style.pointerEvents = 'auto';
+    // transparent backdrop (no white frame)
+    wrap.style.background = 'rgba(0,0,0,0.0)';
+    wrap.style.display = 'flex';
+    wrap.style.justifyContent = 'center';
+    wrap.style.alignItems = 'center';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.opacity = '0';
+    wrap.style.transition = 'opacity 180ms ease, transform 180ms ease';
+
+    const imgEl = document.createElement('img');
+    imgEl.id = 'plainImageOverlayImg';
+    imgEl.style.display = 'block';
+  imgEl.style.maxWidth = '3vw';
+  imgEl.style.maxHeight = '4vh';
+    imgEl.style.height = 'auto';
+    imgEl.style.cursor = 'pointer';
+    imgEl.src = './assets/' + filename;
+
+    wrap.appendChild(imgEl);
+    document.body.appendChild(wrap);
+
+    // fade in
+    requestAnimationFrame(() => { wrap.style.opacity = '1'; });
+
+    const close = () => {
+      wrap.style.opacity = '0';
+      setTimeout(() => { try { wrap.remove(); } catch (e) {} try { if (typeof onClick === 'function') onClick(); } catch (e) {} }, 180);
+    };
+
+    wrap.addEventListener('click', close, { once: true });
+    imgEl.addEventListener('click', close, { once: true });
+  } catch (e) {}
+}
+
+// Show two plain images side-by-side (no frame). Clicking closes the overlay.
+function showPlainDoubleImage(filename, onClick) {
+  try {
+    if (!filename) return;
+    try { const old = document.getElementById('plainImageOverlay'); if (old) old.remove(); } catch (e) {}
+    const wrap = document.createElement('div');
+    wrap.id = 'plainImageOverlay';
+    wrap.style.position = 'fixed';
+    wrap.style.left = '0';
+    wrap.style.top = '0';
+    wrap.style.width = '100vw';
+    wrap.style.height = '100vh';
+    wrap.style.zIndex = '99999';
+    wrap.style.pointerEvents = 'auto';
+    wrap.style.background = 'rgba(0,0,0,0.0)';
+    wrap.style.display = 'flex';
+    wrap.style.justifyContent = 'center';
+    wrap.style.alignItems = 'center';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.opacity = '0';
+    wrap.style.transition = 'opacity 180ms ease, transform 180ms ease';
+
+    const container = document.createElement('div');
+    container.style.display = 'flex';
+    container.style.gap = '12px';
+    container.style.alignItems = 'center';
+
+    const imgLeft = document.createElement('img');
+    imgLeft.style.display = 'block';
+    imgLeft.style.maxWidth = '32vw';
+    imgLeft.style.maxHeight = '56vh';
+    imgLeft.style.height = 'auto';
+    imgLeft.style.cursor = 'pointer';
+    imgLeft.src = './assets/' + filename;
+
+    const imgRight = document.createElement('img');
+    imgRight.style.display = 'block';
+    imgRight.style.maxWidth = '32vw';
+    imgRight.style.maxHeight = '56vh';
+    imgRight.style.height = 'auto';
+    imgRight.style.cursor = 'pointer';
+    imgRight.src = './assets/' + filename;
+
+    const imgBottomLeft = document.createElement('img');
+    imgBottomLeft.style.display = 'block';
+    imgBottomLeft.style.maxWidth = '32vw';
+    imgBottomLeft.style.maxHeight = '56vh';
+    imgBottomLeft.style.height = 'auto';
+    imgBottomLeft.style.cursor = 'pointer';
+    imgBottomLeft.src = './assets/' + filename;
+
+    const imgBottomRight = document.createElement('img');
+    imgBottomRight.style.display = 'block';
+    imgBottomRight.style.maxWidth = '32vw';
+    imgBottomRight.style.maxHeight = '56vh';
+    imgBottomRight.style.height = 'auto';
+    imgBottomRight.style.cursor = 'pointer';
+    imgBottomRight.src = './assets/' + filename;
+
+    container.appendChild(imgLeft);
+    container.appendChild(imgRight);
+    container.appendChild(imgBottomRight);
+    container.appendChild(imgBottomLeft);
+    wrap.appendChild(container);
+    document.body.appendChild(wrap);
+
+  requestAnimationFrame(() => { wrap.style.opacity = '1'; });
+  // persist until cleared by serve action; store reference for removal later
+  try { window._boba_double_overlay = wrap; } catch (e) {}
+  } catch (e) {}
+}
+
+// Remove any extra Boba images added by the helper buttons or toppings.
+function clearExtraBoba() {
+  try {
+    if (cupSprites && cupSprites.extraImages && Array.isArray(cupSprites.extraImages)) {
+      cupSprites.extraImages.forEach(img => { try { if (img && img.destroy) img.destroy(); } catch (e) {} });
+      cupSprites.extraImages = [];
+    }
+  } catch (e) {}
+  try {
+    const w = window._boba_double_overlay;
+    if (w && w.remove) try { w.remove(); } catch (e) {};
+    window._boba_double_overlay = null;
   } catch (e) {}
 }
 
