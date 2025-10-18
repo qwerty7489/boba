@@ -546,7 +546,7 @@ function preload() {
   this.load.image('Thank_You', './assets/Ty.png');
   this.load.image('Thank_You1', './assets/Ty3.png');
   // boba topping image
-  this.load.image('Boba_img', './assets/Boba.png');
+  this.load.image('Boba_img', './assets/boba_small.png');
   // background music (place BgSong.ogg in ./assets/)
 }
 
@@ -890,8 +890,8 @@ function create() {
       .on('pointerdown', () => {
         try {
           if (t && t.key === 'Boba') {
-            // spawn two Boba images (use filename key 'Boba.png'); dynamic-load into Phaser if needed
-            const key = 'Boba.png';
+            // spawn two Boba images (use filename key 'boba_small.png'); dynamic-load into Phaser if needed
+            const key = 'boba_small.png';
             const createTwo = () => {
               const left = scene.add.image(-20, 80, key);
               const right = scene.add.image(20, 80, key);
@@ -916,11 +916,11 @@ function create() {
                 const imgEl = new Image();
                 imgEl.crossOrigin = 'anonymous';
                 imgEl.onload = () => {
-                  try { if (scene.textures && scene.textures.addImage) scene.textures.addImage(key, imgEl); createTwo(); } catch (e) { try { showPlainDoubleImage('Boba.png'); } catch (e2) {} }
+                  try { if (scene.textures && scene.textures.addImage) scene.textures.addImage(key, imgEl); createTwo(); } catch (e) { try { showPlainDoubleImage('boba_smalla.png'); } catch (e2) {} }
                 };
-                imgEl.onerror = () => { try { showPlainDoubleImage('Boba.png'); } catch (e) {} };
-                imgEl.src = './assets/Boba.png';
-              } catch (e) { try { showPlainDoubleImage('Boba.png'); } catch (e2) {} }
+                imgEl.onerror = () => { try { showPlainDoubleImage('boba_small.png'); } catch (e) {} };
+                imgEl.src = './assets/boba_small.png';
+              } catch (e) { try { showPlainDoubleImage('boba_small.png'); } catch (e2) {} }
             }
           } else {
             addTopping(scene, t);
@@ -944,7 +944,7 @@ function create() {
           try {
             const imgEl = new Image();
             imgEl.crossOrigin = 'anonymous';
-            imgEl.src = './assets/Boba.png';
+            imgEl.src = './assets/boba_small.png';
     imgEl.onload = () => {
               try {
                 if (scene.textures && scene.textures.addImage) {
@@ -1382,7 +1382,7 @@ function replaceBobaLabelInMaker(scene) {
           makerToppingsContent.add(icon);
         } else {
           // attempt to load and then replace after loading
-          const imgEl = new Image(); imgEl.crossOrigin = 'anonymous'; imgEl.src = './assets/Boba.png';
+          const imgEl = new Image(); imgEl.crossOrigin = 'anonymous'; imgEl.src = './assets/boba_small.png';
           imgEl.onload = () => { try { if (scene.textures && scene.textures.addImage) scene.textures.addImage('Boba_img', imgEl); const icon2 = scene.add.image(x, y, 'Boba_img'); icon2.setOrigin(0,0.5); try { icon2.setDisplaySize(28,28); } catch (e) { icon2.setScale(0.32); } makerToppingsContent.add(icon2); } catch (e) {}; };
           imgEl.onerror = () => {};
         }
@@ -2118,7 +2118,7 @@ function addToppingToMaker(scene, item, index) {
         try {
           const imgEl = new Image();
           imgEl.crossOrigin = 'anonymous';
-          imgEl.src = './assets/Boba.png';
+          imgEl.src = './assets/boba_small.png';
       imgEl.onload = () => {
             try {
               if (scene.textures && scene.textures.addImage) {
