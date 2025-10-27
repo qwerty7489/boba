@@ -4908,6 +4908,12 @@ function stopVillainDialogue(scene) {
 // Advance to the next villain dialogue line; when finished, stop villainTalking and spawn normal customers
 function advanceVillainDialogue(scene) {
   try {
+     const myAudio2 = document.getElementById('myAudio2');
+     try {
+         myAudio2.play().catch(error => {
+              console.error("Audio play failed:", error);
+         });
+     } catch (e) {}
     if (!villainTalking) return;
     // if a dialog image is currently shown and waiting for click, handle that first
     try {
@@ -5003,6 +5009,9 @@ function advanceVillainDialogue(scene) {
     villainDialogueIndex++;
     if (!villainDialogue || villainDialogueIndex >= villainDialogue.length) {
       // done talking
+      myAudio2.pause();
+      myAudio2.currentTime = 0;
+      
       villainDialogue = null;
       villainDialogueIndex = 0;
       villainTalking = false;
@@ -5041,6 +5050,12 @@ function advanceVillainDialogue(scene) {
         }
       } catch (e) {}
       activeOrder = generateRandomOrder();
+      
+      const myAudio = document.getElementById('myAudio');
+      myAudio.play().catch(error => {
+          console.error("Audio play failed:", error);
+      });
+      
           try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
           refreshOrdersUI(scene);
           // also restore DOM avatar visibility
@@ -5925,6 +5940,8 @@ function showMoneyLoss(scene, amount) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+
+/*
         const playButton = document.getElementById('menuPlayBtn');
         const myAudio = document.getElementById('myAudio');
 
@@ -5933,6 +5950,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.error("Audio play failed:", error);
             });
         });
+*/        
     });
 
 window._boba = { reset, selectSize, selectFlavor, addTopping, orderMatchesDrink, removeCustomer, customersEnabled, getMoney: () => money, addMoney: (n) => { money += n; updateMoneyText(); }, startNextDay: (s) => startNextDay(s), getDayNumber: () => dayNumber };
