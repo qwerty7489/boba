@@ -5052,6 +5052,7 @@ function advanceVillainDialogue(scene) {
       activeOrder = generateRandomOrder();
       
       const myAudio = document.getElementById('myAudio');
+      myAudio.loop = true;
       myAudio.play().catch(error => {
           console.error("Audio play failed:", error);
       });
