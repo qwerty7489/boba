@@ -34,7 +34,7 @@ let activeOrder = null; // only one customer at a time
 let customersEnabled = true; // when false no new customers will be created
 let currentOrderInMaker = null; // the order currently loaded into the maker (if any)
 let lastCustomerAppearanceId = null;
-let money = 0;
+let money = 100000;
 let moneyText = null;
 let moneyHudContainer = null;
 let globalActionsContainer = null;
@@ -52,20 +52,37 @@ let villainDialogueIndex = 0;
 let villainTalking = false;
 // which avatar imageKey is the owner of the current villainDialogue (so we can cancel if customer changes)
 let villainDialogueOwnerImageKey = null;
+// track the story-key of the dialogue owner (e.g. 'PenelopeReturn') when a story sequence starts
+let villainDialogueOwnerStoryKey = null;
+// internal flag: set when we should unlock VDD when the current story dialogue finishes
+let pendingUnlockVDDOnStoryEnd = false;
 // vertical offset (px) to nudge the money HUD lower from the very top
-const moneyHudOffsetY = -5;
+// lower this value to move the HUD up if top UI elements were previously pushed down
+const moneyHudOffsetY = 6;
 let currentScreen = 'orders';
 let receiptContainer = null;
 let receiptExpanded = false;
+// Coins: separate currency rewarded for special customers
+let coins = (typeof window !== 'undefined' && typeof window._coins === 'number') ? window._coins : 0;
+let coinText = null;
+let coinBg = null;
+let coinHudContainer = null;
 // layout anchors for maker UI (populated in create()) so shop can append new buttons
 let makerUIX = null;
 let makerColLeft = null;
+// vertical offset to nudge entire Maker UI down when elements are clipped
+// set to 0 to keep Maker UI at its original vertical position
+const makerYOffset = 0;
 let makerColRight = null;
 // owned lists control which items appear in the Maker UI (shop purchases add to these)
 let ownedFlavors = [];
 let ownedToppings = [];
 // keys of collection entries the player has met (e.g. 'Penelope2', 'Elena2')
 let collectedCharacters = {};
+
+// Pet stats (0-100). Higher is better. These decay a little each day and persist on window for debug.
+let petHunger = (typeof window !== 'undefined' && typeof window._pet_hunger === 'number') ? window._pet_hunger : 100;
+let petBoredom = (typeof window !== 'undefined' && typeof window._pet_boredom === 'number') ? window._pet_boredom : 100;
 
 // Mark a character as collected (imageKey like 'Fiona' -> coll key 'Fiona2')
 function markCharacterCollected(imageKey) {
@@ -86,6 +103,28 @@ function markCharacterCollected(imageKey) {
         try { const el = document.getElementById('collectionOverlay'); if (el) el.style.display = 'flex'; } catch (e) {}
       }
     } catch (e) {}
+  } catch (e) {}
+  // update OTHU visibility in Orders UI in case this collection completed the set
+  try { if (typeof updateOTHUVisibility === 'function') updateOTHUVisibility(); } catch (e) {}
+  try { if (typeof updateTVDUVisibility === 'function') updateTVDUVisibility(); } catch (e) {}
+  try {
+    // if Callisto was collected, mark the Callisto part complete for VDD unlock
+    try {
+      const key = imageKey ? String(imageKey) : '';
+      if (key && (key === 'Callisto' || key === 'Callisto2' || key.toLowerCase() === 'callisto')) {
+        vddCallistoCollected = true;
+        try { ensureVddUnlockedIfReady(); } catch (e) {}
+      }
+    } catch (e) {}
+  } catch (e) {}
+}
+
+function ensureVddUnlockedIfReady() {
+  try {
+    if (!vddUnlocked && vddCallistoCollected && vddPenelopeReturnCompleted) {
+      vddUnlocked = true;
+      try { if (typeof updateVDDVisibility === 'function') updateVDDVisibility(); } catch (e) {}
+    }
   } catch (e) {}
 }
 // Story characters: appear once every 3 days (alternating) and do not place orders
@@ -137,6 +176,154 @@ let storyCharacters = [
     ]
   }
 ];
+// Helper: decide whether an appearance imageKey is a 'special' customer
+function isSpecialAppearance(imageKey) {
+  try {
+    if (!imageKey) return false;
+    const specials = ['Lucas','Nathan','Haley','Peyton','Brooke','Callisto','Stefan','Damon','Elena','Caroline','Bonnie'];
+    return specials.includes(String(imageKey));
+  } catch (e) { return false; }
+}
+
+// Show the OTHU image in the Orders UI when the player has collected all OTH special characters
+function updateOTHUVisibility() {
+  try {
+    if (!ordersContainer) return;
+    const othKeys = ['Lucas','Nathan','Haley','Peyton','Brooke'];
+    // collected key format uses 'Name2'
+    const allCollected = othKeys.every(k => !!collectedCharacters[k + '2']);
+    try {
+      if (ordersContainer.othuImage) {
+        try { if (!window._orders_othu_shown && allCollected && currentScreen === 'orders') window._orders_othu_shown = true; } catch (e) {}
+        const show = (currentScreen === 'orders') && (!!allCollected || !!window._orders_othu_shown);
+        ordersContainer.othuImage.setVisible(show);
+        try { if (ordersContainer.othuFrame) ordersContainer.othuFrame.setVisible(show); } catch (e) {}
+      }
+      // if a DOM fallback exists, toggle its display and reposition
+      try {
+        const d = ordersContainer._othuDom;
+        if (d) {
+          if (currentScreen === 'orders' && (allCollected || !!window._orders_othu_shown)) {
+            try { d.style.display = 'block'; } catch (e) {}
+            // attempt to reposition using stored helper
+            try {
+              const canvas = (window && window.game && window.game.canvas) ? window.game.canvas : (scene && scene.sys && scene.sys.game && scene.sys.game.canvas) ? scene.sys.game.canvas : document.querySelector('#game-container canvas');
+              const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+              const scaleX = canvas ? (canvas.clientWidth / (scene.sys.game.config.width || canvas.width || 1)) : 1;
+              const scaleY = canvas ? (canvas.clientHeight / (scene.sys.game.config.height || canvas.height || 1)) : 1;
+              const worldX = (ordersContainer.x || 0) + (ordersContainer._othuDomPos.x || 0);
+              const worldY = (ordersContainer.y || 0) + (ordersContainer._othuDomPos.y || 0);
+              const left = Math.round(rect.left + worldX * scaleX);
+              const top = Math.round(rect.top + worldY * scaleY);
+              d.style.left = left + 'px';
+              d.style.top = top + 'px';
+              d.style.width = Math.round((ordersContainer._othuDomPos.w || 72) * scaleX) + 'px';
+              d.style.height = Math.round((ordersContainer._othuDomPos.h || 72) * scaleY) + 'px';
+            } catch (e) {}
+          } else {
+            try { d.style.display = 'none'; } catch (e) {}
+          }
+        }
+      } catch (e) {}
+    } catch (e) {}
+  } catch (e) {}
+}
+// Show the TVDU image in the Orders UI when the player has collected all TVD special characters
+function updateTVDUVisibility() {
+  try {
+    if (!ordersContainer) return;
+    const tvdKeys = ['Stefan','Damon','Elena','Caroline','Bonnie'];
+    const allCollected = tvdKeys.every(k => !!collectedCharacters[k + '2']);
+    try {
+        if (ordersContainer.tvduImage) {
+        // once TVDU has been shown in Orders, keep it visible for Orders sessions
+        try { if (!window._orders_tvdu_shown && allCollected && currentScreen === 'orders') window._orders_tvdu_shown = true; } catch (e) {}
+        const showT = (currentScreen === 'orders') && (!!allCollected || !!window._orders_tvdu_shown);
+        ordersContainer.tvduImage.setVisible(showT);
+        try { if (ordersContainer.tvduFrame) ordersContainer.tvduFrame.setVisible(showT); } catch (e) {}
+      }
+      try {
+        const d = ordersContainer._tvduDom;
+        if (d) {
+          // show DOM TVDU when in Orders and either collection is complete or TVDU was previously shown
+          if (currentScreen === 'orders' && (allCollected || !!window._orders_tvdu_shown)) {
+            try { d.style.display = 'block'; } catch (e) {}
+            try {
+              const canvas = (window && window.game && window.game.canvas) ? window.game.canvas : document.querySelector('#game-container canvas');
+              const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+              const scaleX = canvas ? (canvas.clientWidth / (window.game && window.game.config && window.game.config.width || rect.width || 1)) : 1;
+              const scaleY = canvas ? (canvas.clientHeight / (window.game && window.game.config && window.game.config.height || rect.height || 1)) : 1;
+              const worldX = (ordersContainer.x || 0) + (ordersContainer._tvduDomPos.x || 0);
+              const worldY = (ordersContainer.y || 0) + (ordersContainer._tvduDomPos.y || 0);
+              const left = Math.round(rect.left + worldX * scaleX);
+              const top = Math.round(rect.top + worldY * scaleY);
+              d.style.left = left + 'px';
+              d.style.top = top + 'px';
+              d.style.width = Math.round((ordersContainer._tvduDomPos.w || 72) * scaleX) + 'px';
+              d.style.height = Math.round((ordersContainer._tvduDomPos.h || 72) * scaleY) + 'px';
+            } catch (e) {}
+          } else {
+            try { d.style.display = 'none'; } catch (e) {}
+          }
+        }
+      } catch (e) {}
+    } catch (e) {}
+  } catch (e) {}
+}
+// Show the VDD image in the Orders UI when unlocked (Callisto served or PenelopeReturn finished)
+function updateVDDVisibility() {
+  try {
+    if (!ordersContainer) return;
+  try { if (!window._orders_vdd_shown && vddUnlocked && currentScreen === 'orders') window._orders_vdd_shown = true; } catch (e) {}
+  const showV = (currentScreen === 'orders') && (!!vddUnlocked || !!window._orders_vdd_shown);
+  try { if (ordersContainer.vddImage) ordersContainer.vddImage.setVisible(showV); } catch (e) {}
+  try { if (ordersContainer.vddFrame) ordersContainer.vddFrame.setVisible(showV); } catch (e) {}
+    try {
+      const d = ordersContainer._vddDom;
+        if (d) {
+        if (showV) {
+          try { d.style.display = 'block'; } catch (e) {}
+          try {
+            const canvas = (window && window.game && window.game.canvas) ? window.game.canvas : document.querySelector('#game-container canvas');
+            const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+            const scaleX = canvas ? (canvas.clientWidth / (window.game && window.game.config && window.game.config.width || rect.width || 1)) : 1;
+            const scaleY = canvas ? (canvas.clientHeight / (window.game && window.game.config && window.game.config.height || rect.height || 1)) : 1;
+            const worldX = (ordersContainer.x || 0) + (ordersContainer._vddDomPos.x || 0);
+            const worldY = (ordersContainer.y || 0) + (ordersContainer._vddDomPos.y || 0);
+            const left = Math.round(rect.left + worldX * scaleX);
+            const top = Math.round(rect.top + worldY * scaleY);
+            d.style.left = left + 'px';
+            d.style.top = top + 'px';
+            d.style.width = Math.round((ordersContainer._vddDomPos.w || 72) * scaleX) + 'px';
+            d.style.height = Math.round((ordersContainer._vddDomPos.h || 72) * scaleY) + 'px';
+          } catch (e) {}
+        } else {
+          try { d.style.display = 'none'; } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  } catch (e) {}
+}
+// Ensure badge wrappers/images are hidden when not on Orders, and update when on Orders
+function ensureOrdersBadgesVisibility() {
+  try {
+    if (typeof currentScreen === 'undefined' || currentScreen !== 'orders') {
+      try { if (ordersContainer && ordersContainer.othuImage) ordersContainer.othuImage.setVisible(false); } catch (e) {}
+      try { if (ordersContainer && ordersContainer.othuFrame) ordersContainer.othuFrame.setVisible(false); } catch (e) {}
+      try { const od = ordersContainer && ordersContainer._othuDom; if (od) od.style.display = 'none'; } catch (e) {}
+      try { if (ordersContainer && ordersContainer.tvduImage) ordersContainer.tvduImage.setVisible(false); } catch (e) {}
+      try { if (ordersContainer && ordersContainer.tvduFrame) ordersContainer.tvduFrame.setVisible(false); } catch (e) {}
+      try { const td = ordersContainer && ordersContainer._tvduDom; if (td) td.style.display = 'none'; } catch (e) {}
+      try { if (ordersContainer && ordersContainer.vddImage) ordersContainer.vddImage.setVisible(false); } catch (e) {}
+      try { if (ordersContainer && ordersContainer.vddFrame) ordersContainer.vddFrame.setVisible(false); } catch (e) {}
+      try { const vd = ordersContainer && ordersContainer._vddDom; if (vd) vd.style.display = 'none'; } catch (e) {}
+    } else {
+      try { updateOTHUVisibility(); } catch (e) {}
+      try { updateTVDUVisibility(); } catch (e) {}
+      try { updateVDDVisibility(); } catch (e) {}
+    }
+  } catch (e) {}
+}
 // Add Philip story character (appears day 9)
 storyCharacters.push({
   key: 'Philip',
@@ -392,10 +579,10 @@ CUSTOMER_ASSET_MAP.villain = 'Villain1.png';
   CUSTOMER_ASSET_MAP.Gray = 'Gray.png';
   // special character assets
     CUSTOMER_ASSET_MAP.Lucas = 'Luc.png';
-    CUSTOMER_ASSET_MAP.Caroline = 'cf.png';
-    CUSTOMER_ASSET_MAP.Damon = 'Damon.png';
+    CUSTOMER_ASSET_MAP.Caroline = 'Carol.png';
+    CUSTOMER_ASSET_MAP.Damon = 'Damon1.png';
     CUSTOMER_ASSET_MAP.Elena = 'Elena.png';
-    CUSTOMER_ASSET_MAP.Stefan = 'Stefan.png';
+    CUSTOMER_ASSET_MAP.Stefan = 'St.png';
     CUSTOMER_ASSET_MAP.Peyton = 'peyt.png';
     CUSTOMER_ASSET_MAP.Bonnie = 'Bonnie.png';
     CUSTOMER_ASSET_MAP.Brooke = 'Brooke.png';
@@ -479,6 +666,15 @@ function styledButton(scene, x, y, w, h, color, label, onClick) {
   return container;
 }
 
+// Game-wide flag to track if the Pet screen has been unlocked (Carl2 dialogue on day 33)
+let petUnlocked = false;
+// whether VDD badge/asset has been unlocked/shown
+let vddUnlocked = false;
+// track partial unlock state: Callisto served and PenelopeReturn completed
+let vddCallistoCollected = false;
+let vddPenelopeReturnCompleted = false;
+
+
 function preload() {
   // Preload customer avatar so it can be displayed in the Orders UI.
   // Use the URL-encoded filename to avoid issues with spaces/special chars when served.
@@ -530,10 +726,10 @@ function preload() {
   this.load.image('Brooke2', './assets/Brooke2.png');
   this.load.image('Callisto2', './assets/Callisto2.png');
   // TVD special character images
-  this.load.image('Stefan', './assets/Stefan.png');
-  this.load.image('Damon', './assets/Damon.png');
+  this.load.image('Stefan', './assets/St.png');
+  this.load.image('Damon', './assets/Damon1.png');
   this.load.image('Elena', './assets/Elena.png');
-  this.load.image('Caroline', './assets/cf.png');
+  this.load.image('Caroline', './assets/Carol.png');
   this.load.image('Bonnie', './assets/Bonnie.png');
   // TVD collection images
   this.load.image('Stefan2', './assets/Stefan2.png');
@@ -545,6 +741,11 @@ function preload() {
   this.load.image('BobaCorp_raw', './assets/BobaCorp.png');
   this.load.image('Thank_You', './assets/Ty.png');
   this.load.image('Thank_You1', './assets/Ty3.png');
+  // special group collection images
+  this.load.image('OTHU', './assets/OTHU.png');
+  this.load.image('TVDU', './assets/tvdbg.png');
+  this.load.image('Shameless', './assets/ShamU.png');
+  this.load.image('VDD', './assets/VDD.png');
   // boba topping image
   this.load.image('Boba_img', './assets/boba_small.png');
   // background music (place BgSong.ogg in ./assets/)
@@ -618,18 +819,14 @@ function create() {
   // remove visible wall fill so UI background is not the cream color
   try { wall.setAlpha(0); } catch (e) {}
   // shelf (left area)
-  // shelf removed per request
-  for (let i = 0; i < 5; i++) {
-    const jar = scene.add.circle(150 + i * 60, 110, 18, 0xd3b9a3).setStrokeStyle(2, 0xb58d78);
-    uiGroup.add(jar);
-  }
+  // shelf decorations removed to avoid overlapping the receipt area
   // counter across bottom (made transparent to remove cream background)
   const counter = scene.add.rectangle(500, 520, 920, 220, 0xf0e6db).setStrokeStyle(2, 0xd6c3b4);
   try { counter.setAlpha(0); } catch (e) {}
 
   // Right-side UI panel (distinct area so it never overlaps cup)
   const panelCenterX = 760;
-  const panelCenterY = 330;
+  const panelCenterY = 330 + makerYOffset;
   const panelW = 420;
   const panelH = 560;
   const panel = scene.add.rectangle(panelCenterX, panelCenterY, panelW, panelH, 0xffffff).setStrokeStyle(2, 0xccc7c0);
@@ -640,9 +837,9 @@ function create() {
   const cupAreaBg = scene.add.graphics();
   cupAreaBg.fillStyle(0xffffff, 1);
   // make the cup panel just a little taller (height 480) and keep it centered at y=320
-  cupAreaBg.fillRoundedRect(300 - 220, 320 - 240, 440, 480, 12);
+  cupAreaBg.fillRoundedRect(300 - 220, 320 - 240 + makerYOffset, 440, 480, 12);
   cupAreaBg.lineStyle(3, 0xdcdcdc, 1);
-  cupAreaBg.strokeRoundedRect(300 - 220, 320 - 240, 440, 480, 12);
+  cupAreaBg.strokeRoundedRect(300 - 220, 320 - 240 + makerYOffset, 440, 480, 12);
   uiGroup.add(cupAreaBg);
 
   // Create 4 cup size buttons
@@ -660,12 +857,12 @@ function create() {
   // expose maker layout anchors for shop-to-maker wiring
   makerUIX = uiX;
   // Sizes laid out horizontally at top of panel to save vertical space
-  const chooseSizeText = scene.add.text(uiX, 50, 'Choose size:', { font: 'bold 18px Poppins', fill: '#333' });
+  const chooseSizeText = scene.add.text(uiX, 50 + makerYOffset, 'Choose size:', { font: 'bold 18px Poppins', fill: '#333' });
   uiGroup.add(chooseSizeText);
 
   sizes.forEach((s, i) => {
-    const x = uiX + 20 + i * 96; // horizontal spacing
-    const y = 110; // fixed row (center of the box)
+  const x = uiX + 20 + i * 96; // horizontal spacing
+  const y = 110 + makerYOffset; // fixed row (center of the box)
     const boxW = 76;
     const boxH = 76;
     // container for the rounded cube + cup art + label
@@ -778,6 +975,21 @@ function create() {
     { key: 'Hojicha', color: 0xb58f6b },
     { key: 'Pistachio', color: 0xcfe6c9 }
   ];
+  // Additional requested flavors (unique, name-appropriate colors)
+  allFlavors.push({ key: 'Toasted Marshmallow', color: 0xf6d4a4 }); // warm beige with light caramel
+  allFlavors.push({ key: 'Oreo', color: 0xdadfe6 }); // light cookies-and-cream (pale gray)
+  allFlavors.push({ key: 'Churro Cinnamon', color: 0xe0a36b }); // warm cinnamon brown
+  allFlavors.push({ key: 'Banana', color: 0xfff2a8 }); // pale banana yellow
+  allFlavors.push({ key: 'Vanilla Sugar', color: 0xfff8e6 }); // very pale vanilla cream
+  allFlavors.push({ key: 'Lemon Honey', color: 0xfff1b8 }); // soft lemon-honey yellow
+  allFlavors.push({ key: 'Green Tea', color: 0xc7e8b7 }); // light green tea tint
+  allFlavors.push({ key: 'Peppermint Cocoa', color: 0xd5e7e7 }); // muted minty cocoa (pale teal-gray)
+  allFlavors.push({ key: 'Soy Milk', color: 0xf2ecd9 }); // off-white soy milk tone
+  allFlavors.push({ key: 'Genmaicha', color: 0xd9cfa3 }); // toasted rice green-brown
+  allFlavors.push({ key: 'Avocado Mango', color: 0xd3f0a8 }); // light avocado-green with mango tint
+  allFlavors.push({ key: 'Classic Vera Chai', color: 0xd9a76b }); // rich chai brown
+  allFlavors.push({ key: 'Vanilla Bean Chai', color: 0xeed9b8 }); // creamy chai with vanilla tones
+  allFlavors.push({ key: 'Chai Cream', color: 0xf0dcc2 }); // lighter creamy chai
   // global master list used for order generation
   window._BA_FLAVORS = allFlavors.slice();
   // initialize owned flavors with a small starter subset (player can buy the rest in shop)
@@ -791,7 +1003,7 @@ function create() {
 
   // create scrollable content containers for flavors and toppings so they don't overflow
   // these containers will be masked to a visible height so items can be scrolled
-  const makerStartY = 220;
+  const makerStartY = 220 + makerYOffset;
   const makerSlotH = 48;
   // add a small bottom padding so the last slot isn't visually clipped by the mask
   const makerVisiblePadding = 12;
@@ -832,9 +1044,12 @@ function create() {
   makerToppingsContent._dragging = false;
   makerToppingsContent._lastY = 0;
 
-  const chooseFlavorText = scene.add.text(colLeft, 180, 'Choose flavor:', { font: 'bold 18px Poppins', fill: '#333' });
+  const chooseFlavorText = scene.add.text(colLeft, 180 + makerYOffset, 'Choose flavor:', { font: 'bold 18px Poppins', fill: '#333' });
   uiGroup.add(chooseFlavorText);
   uiGroup.add(chooseFlavorText);
+  // helper hint to indicate the flavor column is scrollable
+  const scrollHint = scene.add.text(colLeft, 180 + makerYOffset + 22, 'scroll down', { font: '12px Poppins', fill: '#666' });
+  uiGroup.add(scrollHint);
 
   // populate Maker flavor buttons from ownedFlavors only (inside the scrollable container)
   // center each item within its slot so the top isn't clipped by the mask
@@ -876,6 +1091,26 @@ function create() {
     { key: 'Oat Granola', color: 0xd6caae },
     { key: 'Honey Pearls', color: 0xffdca3 }
   ];
+  // New toppings added by user request (available in shop, not owned by default)
+  allToppings.push({ key: 'Cookie', color: 0xd2b48c });
+  allToppings.push({ key: 'Rainbow Boba', color: 0xff6ec7 });
+  allToppings.push({ key: 'Mystery Boba', color: 0x8f6bff });
+  allToppings.push({ key: 'Sun Jelly', color: 0xffe36b });
+  allToppings.push({ key: 'Star Boba', color: 0xffe6a8 });
+  // Additional toppings requested
+  allToppings.push({ key: 'Matcha Boba', color: 0x3f8b4a });
+  allToppings.push({ key: 'Yogurt Boba', color: 0xf6f7f9 });
+  allToppings.push({ key: 'Custard Cubes', color: 0xf0c969 });
+  allToppings.push({ key: 'Sweet Corn', color: 0xfff6a8 });
+  allToppings.push({ key: 'Sea Salt Caramel Cubes', color: 0xd9b38a });
+  allToppings.push({ key: 'Pistachio Crumbs', color: 0x8fb38a });
+  allToppings.push({ key: 'Jasmine Pearls', color: 0xfff2d9 });
+  allToppings.push({ key: 'Lavender Pearls', color: 0xd7c7ff });
+  allToppings.push({ key: 'Tea Jelly', color: 0xb88b5a });
+  allToppings.push({ key: 'Ube Pudding', color: 0x6f3fa6 });
+  allToppings.push({ key: 'Blueberry Jelly', color: 0x6b5fd9 });
+  allToppings.push({ key: 'Peach Jelly', color: 0xffc9a8 });
+  allToppings.push({ key: 'Konjac Jelly', color: 0xcfcfcf });
   window._BA_TOPPINGS = allToppings.slice();
   // initialize owned toppings with a small starter subset
   ownedToppings = allToppings.slice(0, 4);
@@ -888,98 +1123,23 @@ function create() {
   const label = scene.add.text(12, localY - 8, t.key, { font: 'bold 14px Poppins', fill: '#3b2b2b' });
     btn.setInteractive({ useHandCursor: true })
       .on('pointerdown', () => {
-        try {
-          if (t && t.key === 'Boba') {
-            // spawn two Boba images (use filename key 'boba_small.png'); dynamic-load into Phaser if needed
-            const key = 'boba_small.png';
-            const createTwo = () => {
-              const left = scene.add.image(-20, 80, key);
-              const right = scene.add.image(20, 80, key);
-              left.setScale(0.14);
-              right.setScale(0.14);
-              left.setDepth(1200);
-              right.setDepth(1200);
-              if (cupSprites && cupSprites.container) {
-                cupSprites.container.add(left);
-                cupSprites.container.add(right);
-              } else {
-                left.x = 300 - 20; left.y = 400;
-                right.x = 300 + 20; right.y = 400;
-              }
-              // persist references so they can be cleared when the drink is served
-              try { cupSprites.extraImages = cupSprites.extraImages || []; cupSprites.extraImages.push(left, right); } catch (e) {}
-            };
-            if (scene.textures && scene.textures.exists && scene.textures.exists(key)) {
-              createTwo();
-            } else {
-              try {
-                const imgEl = new Image();
-                imgEl.crossOrigin = 'anonymous';
-                imgEl.onload = () => {
-                  try { if (scene.textures && scene.textures.addImage) scene.textures.addImage(key, imgEl); createTwo(); } catch (e) { try { showPlainDoubleImage('boba_smalla.png'); } catch (e2) {} }
-                };
-                imgEl.onerror = () => { try { showPlainDoubleImage('boba_small.png'); } catch (e) {} };
-                imgEl.src = './assets/boba_small.png';
-              } catch (e) { try { showPlainDoubleImage('boba_small.png'); } catch (e2) {} }
-            }
-          } else {
-            addTopping(scene, t);
-          }
-        } catch (e) {}
+        try { addTopping(scene, t); } catch (e) {}
       })
       .on('pointerover', () => scene.tweens.add({ targets: btn, scale: 1.03, duration: 120 }))
       .on('pointerout', () => scene.tweens.add({ targets: btn, scale: 1.0, duration: 120 }));
     makerToppingsContent.add(btn);
-    // Replace the textual label with the Boba image for the Boba topping when available
-    try {
-      if (t.key === 'Boba') {
-        // prefer existing Phaser texture
-        if (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img')) {
-          const icon = scene.add.image(12, localY - 8, 'Boba_img');
-          icon.setOrigin(0, 0.5);
-          try { icon.setDisplaySize(28, 28); } catch (e) { icon.setScale(0.32); }
-          makerToppingsContent.add(icon);
-        } else {
-          // attempt to dynamically load the image into Phaser's texture manager
-          try {
-            const imgEl = new Image();
-            imgEl.crossOrigin = 'anonymous';
-            imgEl.src = './assets/boba_small.png';
-    imgEl.onload = () => {
-              try {
-                if (scene.textures && scene.textures.addImage) {
-                  try { scene.textures.addImage('Boba_img', imgEl); } catch (e) {}
-                }
-                // create the icon now that the texture exists
-                try {
-      // remove the temporary text label if present
-      try { if (label && label.destroy) label.destroy(); } catch (e) {}
-      const icon2 = scene.add.image(12, localY - 8, 'Boba_img');
-      icon2.setOrigin(0, 0.5);
-      try { icon2.setDisplaySize(28, 28); } catch (e) { icon2.setScale(0.32); }
-      makerToppingsContent.add(icon2);
-                } catch (e) {
-                  makerToppingsContent.add(label);
-                }
-              } catch (e) { makerToppingsContent.add(label); }
-            };
-            imgEl.onerror = () => { makerToppingsContent.add(label); };
-            // meanwhile, add the text label as a temporary fallback which will be replaced when onload runs
-            makerToppingsContent.add(label);
-          } catch (e) {
-            makerToppingsContent.add(label);
-          }
-        }
-      } else {
-        makerToppingsContent.add(label);
-      }
-    } catch (e) {
-      // fallback to text label on any error
-      makerToppingsContent.add(label);
-    }
+    // simple textual label for toppings
+    try { makerToppingsContent.add(label); } catch (e) { }
   });
   // update topping content max scroll
   makerToppingsContent._maxScroll = Math.max(0, ownedToppings.length * makerSlotH - makerToppingsContent._visibleHeight);
+
+  // Add a header title above the toppings column
+  try {
+    const toppingsHeader = scene.add.text(makerColRight, 180 + makerYOffset, 'Choose Toppings:', { font: 'bold 18px Poppins', fill: '#333' });
+    toppingsHeader.setOrigin(0.0, 0.0);
+    uiGroup.add(toppingsHeader);
+  } catch (e) {}
 
   // add an invisible interactive overlay per column to enable drag-start for scrolling
   // place these inside the column containers as the first child so they sit behind the buttons
@@ -1060,7 +1220,7 @@ function create() {
   // ... Show Boba button removed per user request
 
   // Cup drawing container (left side) - moved down to fit inside the smaller panel
-  cupSprites.container = scene.add.container(300, 320);
+  cupSprites.container = scene.add.container(300, 320 + makerYOffset);
   drawCup(scene);
 
   // Orders UI (hidden by default)
@@ -1081,7 +1241,42 @@ function create() {
     ];
     const totalW = specs.length * navW + (specs.length - 1) * gap;
     const startX = Math.floor((scene.sys.game.config.width - totalW) / 2);
-    const navY = scene.sys.game.config.height - navH - 16; // 16px from bottom
+  // place nav slightly lower so it clears other UI and isn't clipped on small viewports
+  const navY = scene.sys.game.config.height - navH - 30 + makerYOffset; // 16px from bottom, nudged down
+    // we'll keep a reference to the Pet button so we can enable it later
+    let petNavBtn = null;
+    const updatePetNavVisual = (btn, unlocked) => {
+      try {
+        if (!btn) return;
+        // make it gray and non-interactive when locked
+        if (!unlocked) {
+          // make visuals noticeably dimmer and text gray
+          btn.list && btn.list.forEach(ch => {
+            try {
+              // dim graphics and text
+              if (ch && ch.setAlpha) ch.setAlpha(0.45);
+              // if it's a text object, set a gray fill
+              if (ch && ch.setStyle) { try { ch.setStyle({ fill: '#9b9b9b' }); } catch(e){} }
+              // if it's an interactive zone, make cursor default
+              if (ch && ch.input && ch.input.cursor) { try { ch.input.cursor = 'default'; } catch(e){} }
+            } catch (e) {}
+          });
+          // disable interaction on the hit zone if present
+          try { const zones = btn.list && btn.list.filter(x => x && x.input && x.input.enabled); if (zones && zones.length) zones.forEach(z => z.disableInteractive && z.disableInteractive()); } catch (e) {}
+        } else {
+          // restore normal visuals
+          btn.list && btn.list.forEach(ch => {
+            try {
+              if (ch && ch.setAlpha) ch.setAlpha(1.0);
+              if (ch && ch.setStyle) { try { ch.setStyle({ fill: '#ffffff' }); } catch(e){} }
+              if (ch && ch.input && ch.input.cursor) { try { ch.input.cursor = 'pointer'; } catch(e){} }
+            } catch (e) {}
+          });
+          try { const zones = btn.list && btn.list.filter(x => x && x.input && !x.input.enabled); if (zones && zones.length) zones.forEach(z => z.setInteractive && z.setInteractive(new Phaser.Geom.Rectangle(0,0,btn.width||160,btn.height||48), Phaser.Geom.Rectangle.Contains)); } catch (e) {}
+        }
+      } catch (e) {}
+    };
+
     specs.forEach((s, i) => {
       const x = startX + i * (navW + gap);
   const btn = styledButton(scene, x, navY, navW, navH, s.color, s.label, s.onClick);
@@ -1092,8 +1287,17 @@ function create() {
   stripe.fillStyle(0xffffff, 0.06);
   stripe.fillRect(x + 8, navY + navH - 12, navW - 16, 6);
   stripe.setDepth(1100 + i);
+      // capture the Pet button ref
+      try { if (s.label === 'Pet') petNavBtn = btn; } catch (e) {}
+      // initialize Pet nav as locked if not unlocked yet
+      try { if (s.label === 'Pet' && !petUnlocked) updatePetNavVisual(petNavBtn, false); } catch (e) {}
     });
+
+    // expose helper to enable the pet nav later when story completes
+    try { window._boba_enablePetNav = () => { try { petUnlocked = true; updatePetNavVisual(petNavBtn, true); } catch (e) {} }; } catch (e) {}
   }
+  // also expose helper to enable the DOM nav Pet button (for Collection DOM nav)
+  try { window._boba_enablePetDomNav = () => { try { petUnlocked = true; if (window._boba_petDomNavBtn) { try { window._boba_petDomNavBtn.style.opacity = '1.0'; window._boba_petDomNavBtn.style.pointerEvents = 'auto'; window._boba_petDomNavBtn.style.cursor = 'pointer'; } catch (e) {} } } catch (e) {} }; } catch (e) {}
 
   // Money HUD (rounded background + text) anchored to top-right
   // create text centered inside the background
@@ -1114,6 +1318,24 @@ function create() {
   moneyText.y = Math.floor(bgH / 2);
   moneyHudContainer = scene.add.container(0, 0, [moneyBg, moneyText]);
   moneyHudContainer.setDepth(2500);
+  // coin HUD: small counter shown under money
+  try {
+    coinText = scene.add.text(0, 0, `Coins: ${coins}`, { font: 'bold 13px Poppins', fill: '#b08a00' });
+    coinText.setOrigin(0.5, 0.5);
+    const cW = Math.max(60, coinText.width + moneyHudPadding * 2);
+    const cH = Math.max(20, coinText.height + moneyHudPadding);
+    coinBg = scene.add.graphics();
+    coinBg.fillStyle(0xfffbdb, 1);
+    coinBg.fillRoundedRect(0, 0, cW, cH, 6);
+    coinBg.lineStyle(1, 0xf0d88a, 1);
+    coinBg.strokeRoundedRect(0, 0, cW, cH, 6);
+    coinHudContainer = scene.add.container(0, 0, [coinBg, coinText]);
+    coinHudContainer.setDepth(2500);
+  // Save/Load buttons will be created in the global actions area to the right of Next Day
+    // center text
+    coinText.x = Math.floor(cW / 2);
+    coinText.y = Math.floor(cH / 2);
+  } catch (e) {}
   // quick action buttons near money HUD: Next Day and Auto Complete
   try {
     const btnW = 120;
@@ -1121,19 +1343,154 @@ function create() {
     const gap = 8;
     // position to the left of money HUD
     const actionsX = Math.max(12, (scene.sys.game.config.width || window.innerWidth) - 12 - btnW * 2 - gap - 100);
-    const actionsY = 12;
+    // move actions slightly lower to avoid being clipped by browser UI / OS bars
+  const actionsY = 12;
   // create a persistent actions container so buttons are visible across screens (except title)
   globalActionsContainer = scene.add.container(0,0);
   const nextDayBtn = styledButton(scene, actionsX, actionsY, btnW, btnH, 0xffb86b, 'Next Day', () => { try { startNextDay(scene); } catch (e) {} });
   const autoBtn = styledButton(scene, actionsX + btnW + gap, actionsY, btnW, btnH, 0xff6b6b, 'Auto Complete', () => { try { autoCompleteActiveOrder(scene); } catch (e) {} });
+  // place Save/Load to the right of Auto Complete
+  const saveBtnX = actionsX + (btnW + gap) * 2; // two slots right of Next Day
+  const saveBtn = styledButton(scene, saveBtnX, actionsY, 90, btnH - 4, 0x4f9ef6, 'Save', () => {
+    try {
+      const payload = { day: dayNumber };
+      try { payload.ownedFlavors = (ownedFlavors || []).map(f => f.key || f); } catch (e) { payload.ownedFlavors = []; }
+      try { payload.ownedToppings = (ownedToppings || []).map(t => t.key || t); } catch (e) { payload.ownedToppings = []; }
+      try { payload.money = (typeof money === 'number') ? money : Number(money) || 0; } catch (e) { payload.money = 0; }
+      try { payload.collected = Object.keys(collectedCharacters || {}).filter(k => !!collectedCharacters[k]); } catch (e) { payload.collected = []; }
+      try {
+        const b = { tvdu: false, othu: false, vdd: false, sham: false };
+        try {
+          if (ordersContainer && ordersContainer.tvduImage && typeof ordersContainer.tvduImage.visible !== 'undefined') b.tvdu = !!ordersContainer.tvduImage.visible;
+          else {
+            const td = document.getElementById('ordersTvduWrap') || (ordersContainer && ordersContainer._tvduDom);
+            try { if (td && td.style && td.style.display && td.style.display !== 'none') b.tvdu = true; } catch (e) {}
+          }
+        } catch (e) {}
+        try {
+          if (ordersContainer && ordersContainer.othuImage && typeof ordersContainer.othuImage.visible !== 'undefined') b.othu = !!ordersContainer.othuImage.visible;
+          else {
+            const od = document.getElementById('ordersOthuWrap') || (ordersContainer && ordersContainer._othuDom);
+            try { if (od && od.style && od.style.display && od.style.display !== 'none') b.othu = true; } catch (e) {}
+          }
+        } catch (e) {}
+        try {
+          if (ordersContainer && ordersContainer.vddImage && typeof ordersContainer.vddImage.visible !== 'undefined') b.vdd = !!ordersContainer.vddImage.visible;
+          else {
+            const vd = document.getElementById('ordersVddWrap') || (ordersContainer && ordersContainer._vddDom);
+            try { if (vd && vd.style && vd.style.display && vd.style.display !== 'none') b.vdd = true; } catch (e) {}
+          }
+        } catch (e) {}
+        try {
+          const p = document.getElementById('persistentImageOverlay');
+          if (p && p.style && p.style.display && p.style.display !== 'none') b.sham = true;
+          if (!b.sham) try { if (window._orders_shamu_shown) b.sham = true; } catch (e) {}
+        } catch (e) {}
+        payload.badges = b;
+      } catch (e) { payload.badges = {}; }
+      localStorage.setItem('boba_saved', JSON.stringify(payload));
+      console.log('Saved state', payload);
+    } catch (e) {}
+  });
+  const loadBtn = styledButton(scene, saveBtnX + 90 + 8, actionsY, 90, btnH - 4, 0x7adf8f, 'Load', () => {
+    try {
+      const raw = localStorage.getItem('boba_saved');
+      if (!raw) return;
+      const payload = JSON.parse(raw);
+      const s = parseInt(payload && payload.day, 10);
+      if (!s || isNaN(s) || s < 1) return;
+      // restore day
+      dayNumber = s;
+      // restore money if present
+      try {
+        if (payload && (typeof payload.money === 'number' || !isNaN(Number(payload.money)))) {
+          money = Number(payload.money);
+          try { updateMoneyText(scene); } catch (e) {}
+        }
+      } catch (e) {}
+      dayServedCount = 0;
+      dayStartMoney = money;
+      customersEnabled = true;
+      // restore owned flavors/toppings if present
+      try {
+        if (payload && Array.isArray(payload.ownedFlavors)) {
+          const master = window._BA_FLAVORS || [];
+          try {
+            const saved = payload.ownedFlavors.map(k => master.find(m => m.key === k)).filter(Boolean);
+            const existingKeys = new Set((ownedFlavors || []).map(f => f && f.key));
+            ownedFlavors = (ownedFlavors || []).slice();
+            saved.forEach(s => { if (s && !existingKeys.has(s.key)) { ownedFlavors.push(s); existingKeys.add(s.key); } });
+          } catch (e) {}
+        }
+      } catch (e) {}
+      try {
+        if (payload && Array.isArray(payload.ownedToppings)) {
+          const masterT = window._BA_TOPPINGS || [];
+          try {
+            const savedT = payload.ownedToppings.map(k => masterT.find(m => m.key === k)).filter(Boolean);
+            const existingT = new Set((ownedToppings || []).map(t => t && t.key));
+            ownedToppings = (ownedToppings || []).slice();
+            savedT.forEach(s => { if (s && !existingT.has(s.key)) { ownedToppings.push(s); existingT.add(s.key); } });
+          } catch (e) {}
+        }
+      } catch (e) {}
+      activeOrder = generateRandomOrder();
+      try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
+      // restore collected characters (merge, do not remove existing)
+      try {
+        if (payload && Array.isArray(payload.collected)) {
+          try {
+            const savedKeys = payload.collected.filter(Boolean).map(k => String(k));
+            try { collectedCharacters = collectedCharacters || {}; } catch (e) { collectedCharacters = {}; }
+            savedKeys.forEach(k => { try { collectedCharacters[k] = true; } catch (e) {} });
+          } catch (e) {}
+        }
+      } catch (e) {}
+      // restore badge/persistent image state
+      try {
+        if (payload && payload.badges) {
+          try {
+            const b = payload.badges || {};
+            if (b.tvdu) try { window._orders_tvdu_shown = true; window._orders_tvdu_persistent = true; } catch (e) {}
+            if (b.othu) try { window._orders_othu_shown = true; window._orders_othu_persistent = true; } catch (e) {}
+            if (b.vdd) try { window._orders_vdd_shown = true; window._orders_vdd_persistent = true; } catch (e) {}
+            if (b.sham) {
+              try { window._orders_shamu_shown = true; } catch (e) {}
+              try { showPersistentImage('ShamU.png'); } catch (e) {}
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+      try { if (dayText) dayText.setText(`Day ${dayNumber}`); refreshDayContainer(); } catch (e) {}
+      try { refreshOrdersUI(scene); } catch (e) {}
+      try { createShopUI(scene); } catch (e) {}
+      try { updateMakerUI(scene); } catch (e) {}
+      try {
+        try { if (window._orders_othu_shown && ordersContainer && ordersContainer.othuImage) { ordersContainer.othuImage.setVisible(true); if (ordersContainer.othuFrame) ordersContainer.othuFrame.setVisible(true); } } catch (e) {}
+        try { if (window._orders_tvdu_shown && ordersContainer && ordersContainer.tvduImage) { ordersContainer.tvduImage.setVisible(true); if (ordersContainer.tvduFrame) ordersContainer.tvduFrame.setVisible(true); } } catch (e) {}
+        try { if (window._orders_vdd_shown && ordersContainer && ordersContainer.vddImage) { ordersContainer.vddImage.setVisible(true); if (ordersContainer.vddFrame) ordersContainer.vddFrame.setVisible(true); } } catch (e) {}
+        try { const od = ordersContainer && ordersContainer._othuDom; if (od && window._orders_othu_shown) od.style.display = 'block'; } catch (e) {}
+        try { const td = ordersContainer && ordersContainer._tvduDom; if (td && window._orders_tvdu_shown) td.style.display = 'block'; } catch (e) {}
+        try { const vd = ordersContainer && ordersContainer._vddDom; if (vd && window._orders_vdd_shown) vd.style.display = 'block'; } catch (e) {}
+        try { if (window._orders_shamu_shown) { try { showPersistentImage('ShamU.png'); } catch (e) {} } } catch (e) {}
+      } catch (e) {}
+      try { showOrdersScreen(scene); } catch (e) {}
+      try { ensureOrdersBadgesVisibility(); } catch (e) {}
+    } catch (e) {}
+  });
   nextDayBtn.setDepth(2600);
   autoBtn.setDepth(2600);
+  saveBtn.setDepth(2600);
+  loadBtn.setDepth(2600);
   globalActionsContainer.add(nextDayBtn);
   globalActionsContainer.add(autoBtn);
+  globalActionsContainer.add(saveBtn);
+  globalActionsContainer.add(loadBtn);
   globalActionsContainer.setDepth(2600);
   } catch (e) {}
 
   // Day tracker: bordered container to the left of the receipt
+  // place the day counter a bit lower so it's not hidden by the browser chrome on small viewports
   dayContainer = scene.add.container(12, 12);
   dayContainer.setDepth(2500);
   // background box (will be resized when text updates)
@@ -1150,6 +1507,107 @@ function create() {
   refreshDayContainer();
   // keep dayContainer separate so it remains visible across UI screens (except title overlay)
 
+  // Helper: force the OTHU badge to appear (for testing). Does not modify collectedCharacters.
+  function spawnOthuBadge(scene) {
+    try {
+      // Only allow this debug helper to show the OTHU badge when Orders screen is active.
+      try { if (typeof currentScreen !== 'undefined' && currentScreen !== 'orders') return; } catch (e) {}
+      // prefer using updateOTHUVisibility logic but force visibility directly for both paths
+      if (ordersContainer && ordersContainer.othuImage) {
+        try { ordersContainer.othuImage.setVisible(true); } catch (e) {}
+        try { if (ordersContainer.othuFrame) ordersContainer.othuFrame.setVisible(true); } catch (e) {}
+      }
+  // mark as shown/persistent so it remains visible for Orders sessions
+  try { window._orders_othu_shown = true; window._orders_othu_persistent = true; } catch (e) {}
+      try {
+        const d = ordersContainer && ordersContainer._othuDom;
+        if (d) {
+          try { d.style.display = 'block'; } catch (e) {}
+        }
+      } catch (e) {}
+    } catch (e) {}
+  }
+
+  // Create a small debug button under the dayContainer to force-show the OTHU badge
+  try {
+    const btn = styledButton(scene, 12, 12 + 44, 120, 28, 0x5daee8, 'Show Badge', () => { try { spawnOthuBadge(scene); } catch (e) {} });
+    btn.setDepth(2500);
+    dayContainer.add(btn);
+  } catch (e) {}
+
+  // Helper: force the TVDU badge to appear (for testing). Does not modify collectedCharacters.
+  function spawnTvduBadge(scene) {
+    try {
+      // Only allow this debug helper to show TVDU when Orders screen is active.
+      try { if (typeof currentScreen !== 'undefined' && currentScreen !== 'orders') return; } catch (e) {}
+      if (ordersContainer && ordersContainer.tvduImage) {
+        try { ordersContainer.tvduImage.setVisible(true); } catch (e) {}
+        try { if (ordersContainer.tvduFrame) ordersContainer.tvduFrame.setVisible(true); } catch (e) {}
+      }
+  // mark as shown/persistent so it remains visible for Orders sessions
+  try { window._orders_tvdu_shown = true; window._orders_tvdu_persistent = true; } catch (e) {}
+      try {
+        const d = ordersContainer && ordersContainer._tvduDom;
+        if (d) {
+          try { d.style.display = 'block'; } catch (e) {}
+        }
+      } catch (e) {}
+    } catch (e) {}
+  }
+
+  // Add a second debug button to force-show the TVDU badge
+  try {
+    const btn2 = styledButton(scene, 12, 12 + 44 + 36, 120, 28, 0xff7ab6, 'Show TVDU', () => { try { spawnTvduBadge(scene); } catch (e) {} });
+    btn2.setDepth(2500);
+    dayContainer.add(btn2);
+  } catch (e) {}
+
+  // Helper: force the ShamU persistent postcard to appear (for testing)
+  function spawnShamUBadge(scene) {
+    try {
+      // Only allow this debug helper to show ShamU when Orders screen is active.
+      try {
+        if (typeof currentScreen !== 'undefined' && currentScreen !== 'orders') return;
+        showPersistentImage('ShamU.png');
+      } catch (e) {}
+    } catch (e) {}
+  }
+
+  // Add a third debug button to force-show the ShamU postcard
+  try {
+  // Make the debug button inert when not on Orders to avoid accidental show during Maker/Shop
+  const btn3 = styledButton(scene, 12, 12 + 44 + 36 + 36, 120, 28, 0xffd166, 'Show ShamU', () => { try { if (typeof currentScreen !== 'undefined' && currentScreen !== 'orders') return; spawnShamUBadge(scene); } catch (e) {} });
+    btn3.setDepth(2500);
+    dayContainer.add(btn3);
+  } catch (e) {}
+
+  // Helper: force the VDD badge to appear (for testing). Does not modify permanent unlock flags.
+  function spawnVddBadge(scene) {
+    try {
+      // Only allow this debug helper to show VDD when Orders screen is active.
+      try { if (typeof currentScreen !== 'undefined' && currentScreen !== 'orders') return; } catch (e) {}
+      if (ordersContainer && ordersContainer.vddImage) {
+        try { ordersContainer.vddImage.setVisible(true); } catch (e) {}
+        try { if (ordersContainer.vddFrame) ordersContainer.vddFrame.setVisible(true); } catch (e) {}
+      }
+    // mark as shown/persistent so it remains visible for Orders sessions
+    try { window._orders_vdd_shown = true; window._orders_vdd_persistent = true; } catch (e) {}
+      try {
+        const d = ordersContainer && ordersContainer._vddDom;
+        if (d) {
+          try { d.style.display = 'block'; } catch (e) {}
+        }
+      } catch (e) {}
+    } catch (e) {}
+  }
+
+  // Add a debug button to spawn VDD (under the ShamU button)
+  try {
+    const btn4 = styledButton(scene, 12, 12 + 44 + 36 + 36 + 36, 120, 28, 0x9b7edc, 'Show VDD', () => { try { spawnVddBadge(scene); } catch (e) {} });
+    btn4.setDepth(2500);
+    dayContainer.add(btn4);
+  } catch (e) {}
+
   // position once based on game config (places the container so the bg's right edge sits at gw - margin)
   function positionMoneyText(s) {
     try {
@@ -1161,6 +1619,13 @@ function create() {
   moneyHudContainer.y = margin + moneyHudOffsetY;
   // keep text centered in updated bg
   try { moneyText.x = Math.floor(curW / 2); moneyText.y = Math.floor(curH / 2); } catch (e) {}
+  // position coin HUD under money HUD (if present)
+  try {
+    if (coinHudContainer) {
+      coinHudContainer.x = Math.floor(gw - margin - curW);
+      coinHudContainer.y = Math.floor(moneyHudContainer.y + curH + 8);
+    }
+  } catch (e) {}
     } catch (e) {}
   }
   positionMoneyText(scene);
@@ -1233,8 +1698,7 @@ function create() {
   // Start directly with the Orders UI (no title screen)
   showOrdersScreen(scene);
 
-  // Ensure any leftover textual 'Boba' labels in the Maker UI are replaced with the image
-  try { replaceBobaLabelInMaker(scene); } catch (e) {}
+  // Boba-specific maker label replacement removed
 
   // show the Menu.png overlay scaled to the game UI
   try {
@@ -1355,41 +1819,7 @@ function showPetToast(message, duration) {
   } catch (e) {}
 }
 
-// Replace any textual 'Boba' labels inside the Maker toppings container with the Boba image.
-function replaceBobaLabelInMaker(scene) {
-  try {
-    if (!makerToppingsContent || !scene || !scene.add) return;
-    // collect text objects that show the label 'Boba'
-    const toRemove = [];
-    makerToppingsContent.list.forEach(child => {
-      try {
-        if (child && child.type === 'Text' && String(child.text || '').trim().toLowerCase() === 'boba') {
-          toRemove.push(child);
-        }
-      } catch (e) {}
-    });
-    if (toRemove.length === 0) return;
-    // if texture exists, create icons at the same positions as the labels
-    const hasTex = (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img'));
-    toRemove.forEach(txt => {
-      try {
-        const x = txt.x; const y = txt.y + 8; // align vertically like labels
-        try { txt.destroy(); } catch (e) {}
-        if (hasTex) {
-          const icon = scene.add.image(x, y, 'Boba_img');
-          icon.setOrigin(0, 0.5);
-          try { icon.setDisplaySize(28, 28); } catch (e) { icon.setScale(0.32); }
-          makerToppingsContent.add(icon);
-        } else {
-          // attempt to load and then replace after loading
-          const imgEl = new Image(); imgEl.crossOrigin = 'anonymous'; imgEl.src = './assets/boba_small.png';
-          imgEl.onload = () => { try { if (scene.textures && scene.textures.addImage) scene.textures.addImage('Boba_img', imgEl); const icon2 = scene.add.image(x, y, 'Boba_img'); icon2.setOrigin(0,0.5); try { icon2.setDisplaySize(28,28); } catch (e) { icon2.setScale(0.32); } makerToppingsContent.add(icon2); } catch (e) {}; };
-          imgEl.onerror = () => {};
-        }
-      } catch (e) {}
-    });
-  } catch (e) {}
-}
+// Boba label replacement removed
 
 // Collection overlay: full-screen image display for the Collection Book
 function createCollectionOverlay() {
@@ -1605,6 +2035,7 @@ function createCollectionOverlay() {
 
 function showCollectionScreen(scene) {
   try {
+    currentScreen = 'collection';
     createCollectionOverlay();
     const el = document.getElementById('collectionOverlay');
     if (!el) return;
@@ -1638,12 +2069,27 @@ function showCollectionScreen(scene) {
     try { const d = document.getElementById('domCustomerImg'); if (d) d.style.display = 'none'; } catch (e) {}
     // prevent new customers or interactions while viewing the collection
     try { customersEnabled = false; } catch (e) {}
-    // keep navigation buttons clickable (they are separate objects not hidden here)
+  // Hide/remove any DOM overlays or badge wrappers that could sit above the Collection UI
+  try { const p = document.getElementById('persistentImageOverlay'); if (p) p.style.display = 'none'; } catch (e) {}
+  try { const p2 = document.getElementById('plainImageOverlay'); if (p2) p2.style.display = 'none'; } catch (e) {}
+  try { const w1 = document.getElementById('ordersOthuWrap'); if (w1) w1.style.display = 'none'; } catch (e) {}
+  try { const w2 = document.getElementById('ordersTvduWrap'); if (w2) w2.style.display = 'none'; } catch (e) {}
+  try { const w3 = document.getElementById('ordersVddWrap'); if (w3) w3.style.display = 'none'; } catch (e) {}
+  // ensure TVDU and VDD visuals are hidden when not on Orders
+  try { if (ordersContainer && ordersContainer.tvduImage) ordersContainer.tvduImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.tvduFrame) ordersContainer.tvduFrame.setVisible(false); } catch (e) {}
+  try { const td = ordersContainer && ordersContainer._tvduDom; if (td) td.style.display = 'none'; } catch (e) {}
+  try { if (ordersContainer && ordersContainer.vddImage) ordersContainer.vddImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.vddFrame) ordersContainer.vddFrame.setVisible(false); } catch (e) {}
+  try { const vd = ordersContainer && ordersContainer._vddDom; if (vd) vd.style.display = 'none'; } catch (e) {}
+  // keep navigation buttons clickable (they are separate objects not hidden here)
   } catch (e) {}
+  try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 function showPetScreen(scene) {
   try {
+    currentScreen = 'pet';
     // ensure any collection overlay is hidden
     try { hideCollectionScreen(); } catch (e) {}
     // create and show a pet overlay (behind the canvas) using Pic.jpeg
@@ -1676,11 +2122,30 @@ function showPetScreen(scene) {
       try { const d = document.getElementById('domCustomerImg'); if (d) d.style.display = 'none'; } catch (e) {}
       // prevent new customers or interactions while viewing the pet screen
       try { customersEnabled = false; } catch (e) {}
+  // ensure OTHU visuals are hidden when not on Orders
+  try { if (ordersContainer && ordersContainer.othuImage && !(window && window._orders_othu_persistent)) ordersContainer.othuImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.othuFrame) ordersContainer.othuFrame.setVisible(false); } catch (e) {}
+  try { const od = ordersContainer && ordersContainer._othuDom; if (od && !(window && window._orders_othu_persistent)) od.style.display = 'none'; } catch (e) {}
+  // ensure TVDU and VDD visuals are hidden when not on Orders
+  try { if (ordersContainer && ordersContainer.tvduImage && !(window && window._orders_tvdu_persistent)) ordersContainer.tvduImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.tvduFrame) ordersContainer.tvduFrame.setVisible(false); } catch (e) {}
+  try { const td = ordersContainer && ordersContainer._tvduDom; if (td && !(window && window._orders_tvdu_persistent)) td.style.display = 'none'; } catch (e) {}
+  try { if (ordersContainer && ordersContainer.vddImage) ordersContainer.vddImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.vddFrame) ordersContainer.vddFrame.setVisible(false); } catch (e) {}
+  try { const vd = ordersContainer && ordersContainer._vddDom; if (vd && !(window && window._orders_vdd_persistent)) vd.style.display = 'none'; } catch (e) {}
+  // ensure TVDU and VDD visuals are hidden when not on Orders
+  try { if (ordersContainer && ordersContainer.tvduImage && !(window && window._orders_tvdu_persistent)) ordersContainer.tvduImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.tvduFrame) ordersContainer.tvduFrame.setVisible(false); } catch (e) {}
+  try { const td = ordersContainer && ordersContainer._tvduDom; if (td && !(window && window._orders_tvdu_persistent)) td.style.display = 'none'; } catch (e) {}
+  try { if (ordersContainer && ordersContainer.vddImage && !(window && window._orders_vdd_persistent)) ordersContainer.vddImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.vddFrame) ordersContainer.vddFrame.setVisible(false); } catch (e) {}
+  try { const vd = ordersContainer && ordersContainer._vddDom; if (vd && !(window && window._orders_vdd_persistent)) vd.style.display = 'none'; } catch (e) {}
     } catch (e) {}
 
     // play hus.mp4 using the dialog video overlay helper (kept after overlay show so audio/video focus is correct)
     try { showDialogVideo('hus.mp4', () => { /* video finished */ }); } catch (e) {}
   } catch (e) {}
+    try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 // Pet overlay: full-screen image display for the Pet UI (uses Pic.jpeg)
@@ -1743,64 +2208,118 @@ function createPetOverlay() {
       return b;
     };
 
-    // Play action: animate the pet image with a quick pulse
-    const playBtn = makeBtn('Play', '#5daee8', () => {
+    // Play action: costs 1 coin
+    const playBtn = makeBtn('Play', '#5daee8', () => {});
+    const playWrap = document.createElement('div');
+    playWrap.style.display = 'flex';
+    playWrap.style.alignItems = 'center';
+    playWrap.style.gap = '8px';
+    playWrap.style.pointerEvents = 'auto';
+    const playCostLbl = document.createElement('div');
+    playCostLbl.textContent = '-1 coin';
+    playCostLbl.style.fontFamily = 'Poppins, sans-serif';
+    playCostLbl.style.fontSize = '13px';
+    playCostLbl.style.color = '#fff';
+    playCostLbl.style.opacity = '0.95';
+    playWrap.appendChild(playBtn);
+    playWrap.appendChild(playCostLbl);
+    playBtn.onclick = () => {
       try {
-        // pulse the pet image for quick feedback
+        if (!(typeof coins === 'number') || coins < 1) { showPetToast('Need 1 coin to play', 900); return; }
+        coins = coins - 1; try { if (coinText) coinText.setText(`Coins: ${coins}`); } catch (e) {} try { window._coins = coins; } catch (e) {}
+        // pulse the pet image and apply effects
         const petImg = document.getElementById('petOverlayImg');
-        if (petImg) {
-          petImg.style.transition = 'transform 260ms ease-out';
-          petImg.style.transform = 'scale(1.08)';
-          setTimeout(() => { try { petImg.style.transform = 'scale(1)'; } catch (e) {} }, 260);
-        }
-        showPetToast('Playing...', 900);
-        // use the existing video overlay helper to play Play1.mp4
+        if (petImg) { petImg.style.transition = 'transform 260ms ease-out'; petImg.style.transform = 'scale(1.08)'; setTimeout(() => { try { petImg.style.transform = 'scale(1)'; } catch (e) {} }, 260); }
+        try { petBoredom = Math.min(100, (typeof petBoredom === 'number') ? petBoredom + 40 : 100); } catch (e) {}
+        try { petHunger = Math.max(0, (typeof petHunger === 'number') ? petHunger - 8 : 0); } catch (e) {}
+        try { updatePetOverlayStats(); } catch (e) {}
+        showPetToast('Playing!', 900);
         try { showDialogVideo('Play1.mp4', () => {}); } catch (e) {}
-        // attempt to unmute and play the video (user gesture allows unmuted playback in most browsers)
-        try {
-          setTimeout(() => {
-            try {
-              const v = document.getElementById('dialogVideoOverlay');
-              if (v) {
-                v.muted = false;
-                v.play().catch(() => {});
-              }
-            } catch (e) {}
-          }, 60);
-        } catch (e) {}
+        try { setTimeout(() => { try { const v = document.getElementById('dialogVideoOverlay'); if (v) { v.muted = false; v.play().catch(() => {}); } } catch (e) {} }, 60); } catch (e) {}
       } catch (e) {}
-    });
+    };
 
-    // Feed action: increment a small pet-happiness counter and give a tiny money reward
-    const feedBtn = makeBtn('Feed', '#f2a6d9', () => {
+    // Feed action: costs 1 coin
+    const feedBtn = makeBtn('Feed', '#f2a6d9', () => {});
+    const feedWrap = document.createElement('div');
+    feedWrap.style.display = 'flex';
+    feedWrap.style.alignItems = 'center';
+    feedWrap.style.gap = '8px';
+    feedWrap.style.pointerEvents = 'auto';
+    const feedCostLbl = document.createElement('div');
+    feedCostLbl.textContent = '-1 coin';
+    feedCostLbl.style.fontFamily = 'Poppins, sans-serif';
+    feedCostLbl.style.fontSize = '13px';
+    feedCostLbl.style.color = '#fff';
+    feedCostLbl.style.opacity = '0.95';
+    feedWrap.appendChild(feedBtn);
+    feedWrap.appendChild(feedCostLbl);
+    feedBtn.onclick = () => {
       try {
+        if (!(typeof coins === 'number') || coins < 1) { showPetToast('Need 1 coin to feed', 900); return; }
+        coins = coins - 1; try { if (coinText) coinText.setText(`Coins: ${coins}`); } catch (e) {} try { window._coins = coins; } catch (e) {}
         window._pet_happiness = (window._pet_happiness || 0) + 1;
-        // try to update in-game money display if scene helper exists
-        try {
-          if (typeof money === 'number') {
-            money = (typeof money === 'number') ? money + 1 : 1;
-            if (window._boba_scene && typeof updateMoneyText === 'function') updateMoneyText(window._boba_scene);
-          }
-        } catch (e) {}
+        try { if (typeof money === 'number') { money = (typeof money === 'number') ? money + 1 : 1; if (window._boba_scene && typeof updateMoneyText === 'function') updateMoneyText(window._boba_scene); } } catch (e) {}
+        try { petHunger = Math.min(100, (typeof petHunger === 'number') ? petHunger + 48 : 100); } catch (e) {}
+        try { petBoredom = Math.min(100, (typeof petBoredom === 'number') ? petBoredom + 12 : 100); } catch (e) {}
+        try { updatePetOverlayStats(); } catch (e) {}
         showPetToast('Feeding... +$1', 900);
-        // play the Feeding video overlay
         try { showDialogVideo('Feeding.mp4', () => {}); } catch (e) {}
-        try {
-          setTimeout(() => {
-            try {
-              const v = document.getElementById('dialogVideoOverlay');
-              if (v) {
-                v.muted = false;
-                v.play().catch(() => {});
-              }
-            } catch (e) {}
-          }, 60);
-        } catch (e) {}
+        try { setTimeout(() => { try { const v = document.getElementById('dialogVideoOverlay'); if (v) { v.muted = false; v.play().catch(() => {}); } } catch (e) {} }, 60); } catch (e) {}
       } catch (e) {}
-    });
+    };
 
-    btnWrap.appendChild(playBtn);
-    btnWrap.appendChild(feedBtn);
+    btnWrap.appendChild(playWrap);
+    btnWrap.appendChild(feedWrap);
+    // Create a small stats panel on the right to show Hunger and Boredom
+    try {
+      const statsWrap = document.createElement('div');
+      statsWrap.id = 'petStatsWrap';
+      statsWrap.style.position = 'fixed';
+      statsWrap.style.right = '18px';
+      statsWrap.style.top = '18px';
+      statsWrap.style.width = '220px';
+      statsWrap.style.zIndex = '2600';
+      statsWrap.style.pointerEvents = 'none';
+      statsWrap.style.color = '#fff';
+      statsWrap.style.fontFamily = 'Poppins, sans-serif';
+
+      const makeBar = (label) => {
+        const row = document.createElement('div');
+        row.style.marginBottom = '10px';
+        const lab = document.createElement('div');
+        lab.textContent = label;
+        lab.style.fontSize = '13px';
+        lab.style.marginBottom = '6px';
+        const outer = document.createElement('div');
+        outer.style.width = '100%';
+        outer.style.height = '14px';
+        outer.style.background = 'rgba(0,0,0,0.35)';
+        outer.style.borderRadius = '8px';
+        const inner = document.createElement('div');
+        inner.style.height = '100%';
+        inner.style.width = '100%';
+        inner.style.borderRadius = '8px';
+        inner.style.transition = 'width 300ms ease';
+        outer.appendChild(inner);
+        row.appendChild(lab);
+        row.appendChild(outer);
+        return { row, inner };
+      };
+
+      const hunger = makeBar('Hunger');
+      hunger.inner.style.background = '#ffb86b';
+      const bored = makeBar('Boredom');
+      bored.inner.style.background = '#5daee8';
+  statsWrap.appendChild(hunger.row);
+  statsWrap.appendChild(bored.row);
+  // attach stats into the pet overlay so they only appear while the Pet UI is visible
+  try { div.appendChild(statsWrap); } catch (e) { document.body.appendChild(statsWrap); }
+      // expose inner nodes for updates
+      try { window._pet_stats_nodes = { hungerInner: hunger.inner, boredInner: bored.inner }; } catch (e) {}
+      // initial sync
+      try { updatePetOverlayStats(); } catch (e) {}
+    } catch (e) {}
     // ensure the buttons are appended to body so they sit above the canvas
     document.body.appendChild(btnWrap);
   } catch (e) {}
@@ -1813,6 +2332,10 @@ function hidePetScreen() {
     if (el) el.style.display = 'none';
   // remove left-side pet action buttons if present
   try { const b = document.getElementById('petActionButtons'); if (b && b.parentNode) b.parentNode.removeChild(b); } catch (e) {}
+  // remove pet stats panel if present (ensure hunger/boredom UI isn't left behind)
+  try { const s = document.getElementById('petStatsWrap'); if (s && s.parentNode) s.parentNode.removeChild(s); } catch (e) {}
+  // clear exposed pet stat nodes and values so other UIs don't read them
+  try { if (typeof window !== 'undefined') { delete window._pet_stats_nodes; delete window._pet_hunger; delete window._pet_boredom; } } catch (e) {}
   try { const nav = document.getElementById('domNavWrap'); if (nav && nav.parentNode) nav.parentNode.removeChild(nav); } catch (e) {}
     try { if (dayContainer) dayContainer.setVisible(true); } catch (e) {}
     try { if (globalActionsContainer) globalActionsContainer.setVisible(true); } catch (e) {}
@@ -1829,6 +2352,26 @@ function hidePetScreen() {
     } catch (e) {}
   } catch (e) {}
 }
+
+// Update the visual bars in the Pet overlay (if present)
+function updatePetOverlayStats() {
+  try {
+    // clamp values
+    petHunger = Math.max(0, Math.min(100, Number(petHunger) || 0));
+    petBoredom = Math.max(0, Math.min(100, Number(petBoredom) || 0));
+    if (window && window._pet_stats_nodes) {
+      try {
+        const hi = window._pet_stats_nodes.hungerInner;
+        const bi = window._pet_stats_nodes.boredInner;
+        if (hi) hi.style.width = (petHunger) + '%';
+        if (bi) bi.style.width = (petBoredom) + '%';
+      } catch (e) {}
+    }
+    // persist to window for debugging/persistence across quick reloads
+    try { if (typeof window !== 'undefined') { window._pet_hunger = petHunger; window._pet_boredom = petBoredom; } } catch (e) {}
+  } catch (e) {}
+}
+
 
 function hideCollectionScreen() {
   try {
@@ -1851,6 +2394,7 @@ function hideCollectionScreen() {
     }
   } catch (e) {}
   } catch (e) {}
+  try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 function showDayOver(scene) {
@@ -1877,6 +2421,7 @@ function hideDayOver() {
     // restore DOM customer if Orders is active
     try { const d = document.getElementById('domCustomerImg'); if (d && currentScreen === 'orders') d.style.display = 'block'; } catch (e) {}
   } catch (e) {}
+  try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 function startNextDay(scene) {
@@ -1894,6 +2439,12 @@ function startNextDay(scene) {
   try { if (dayText) dayText.setText(`Day ${dayNumber}`); refreshDayContainer(); } catch (e) {}
     // show Orders screen so player can continue
     showOrdersScreen(scene);
+    // Decay pet stats slightly each new day
+    try {
+      petHunger = Math.max(0, (typeof petHunger === 'number') ? petHunger - 8 : 0);
+      petBoredom = Math.max(0, (typeof petBoredom === 'number') ? petBoredom - 6 : 0);
+      try { updatePetOverlayStats(); } catch (e) {}
+    } catch (e) {}
   } catch (e) {}
 }
 
@@ -1990,6 +2541,7 @@ function hideMenuOverlay() {
   // restore global actions
   try { if (globalActionsContainer) globalActionsContainer.setVisible(true); } catch (e) {}
   } catch (e) {}
+  try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 
@@ -2031,47 +2583,94 @@ function selectFlavor(scene, flavor) {
 }
 
 function addTopping(scene, topping) {
-  // Only allow each topping type to be added once. When added, spawn that topping
-  // as two neat rows near the bottom of the cup. If another topping type is added
-  // later it will overlay at the same bottom area.
+  // Place toppings in neat rows at the bottom band of the cup, similar to Boba layout.
   try {
-  // require flavor to be selected before adding toppings
-  if (!selectedFlavor) return;
-    if (toppings.some(tt => tt.key === topping.key)) return; // already added
+    if (!selectedFlavor) return; // require a flavor selected
+    // Remove any existing instances of the same topping to ensure a clean replacement
+    for (let i = toppings.length - 1; i >= 0; i--) {
+      if (toppings[i] && toppings[i].key === topping.key) toppings.splice(i, 1);
+    }
+
+    // Desired counts per topping type (how many pearls/cubes to lay out)
     const counts = { 'Boba': 8, 'Mochi': 6, 'Pudding': 4, 'Jelly': 6 };
-    const total = counts[topping.key] || 6;
-    // compute cup geometry similar to drawCup so placements align
+    let total = counts[topping.key] || 6;
+    // Force exact 6 for Popping Boba as requested
+    if (topping.key === 'Popping Boba') total = 6;
+
+    // compute cup geometry matching drawCup so placements align
     const size = selectedSize || { radius: 80 };
     const cupRadius = size.radius;
     const cupWidth = cupRadius * 1.6;
     const cupHeight = cupRadius * 2.0;
+
+    // inner bottom width where toppings sit
     const bottomW = Math.max(40, Math.floor(cupWidth * 0.6));
     const innerBottomW = Math.max(12, bottomW);
-    // tx area in local cup coords (same reference used in drawCup)
     const left = -innerBottomW / 2 + 8;
     const right = innerBottomW / 2 - 8;
+
+    // compute vertical band (liquid bottom area) same as drawCup bottom band
     const liquidBottom = Math.floor(cupHeight / 2);
-    // two rows: top row slightly above bottom, second row a bit higher
-    const rowY1 = liquidBottom - 8;
-    const rowY2 = liquidBottom - 20;
-    const row1Count = Math.ceil(total / 2);
-    const row2Count = Math.floor(total / 2);
-    // helper to evenly space n items between left..right
-    const placeRow = (n, y, idBase) => {
-      if (n <= 0) return;
-      const span = Math.max(1, n - 1);
-      for (let i = 0; i < n; i++) {
-        const x = (span === 0) ? Math.floor((left + right) / 2) : Math.floor(left + (right - left) * (i / span));
-  const t = { ...topping, id: Phaser.Utils.String.UUID() + '-' + idBase + '-' + i, _x: x, _y: Math.floor(y), _placed: false };
-        toppings.push(t);
-      }
+    const liquidTop = -cupHeight / 2 + 26;
+    const baseLiquidHeight = Math.max(8, Math.floor(liquidBottom - liquidTop));
+    const topBand = liquidBottom - Math.min(48, Math.floor(baseLiquidHeight * 0.22));
+    const bottomBand = liquidBottom - 2;
+
+    // spacing based on visual pearl radius so rows align with boba size
+    const pearlR = Math.max(6, Math.floor(cupRadius * 0.07));
+    const pad = Math.max(4, Math.floor(pearlR * 0.5));
+
+    // decide number of columns that fit comfortably
+    const availableW = (right - left) - pad * 2;
+    const colSpacing = Math.max(pearlR * 2.2, pearlR + 8);
+    const maxCols = Math.max(1, Math.floor(availableW / colSpacing));
+
+    // allow per-topping preferred column counts for specific layouts
+    const preferredCols = {
+      'Popping Boba': 3
     };
-    placeRow(row1Count, rowY1, 1);
-    placeRow(row2Count, rowY2, 2);
+
+    // compute rows needed and the starting Y for the bottom-most row
+    let cols = Math.min(maxCols, total);
+    if (preferredCols[topping.key]) {
+      cols = Math.min(maxCols, Math.min(preferredCols[topping.key], total));
+    }
+    const rows = Math.ceil(total / cols);
+    const bottomRowY = bottomBand - pad - pearlR; // bottom-most row Y
+    const rowGap = Math.max(pearlR + 6, Math.floor(pearlR * 1.6));
+
+    // place each topping into grid slots left->right, bottom->up
+    const startIndex = toppings.length;
+    for (let i = 0; i < total; i++) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      const y = bottomRowY - row * rowGap;
+      // center the row horizontally
+      const itemsInRow = (row === rows - 1) ? ((total - row * cols) || cols) : cols;
+      const span = Math.max(1, itemsInRow - 1);
+      const rowLeft = left + pad;
+      const rowRight = right - pad;
+      const x = (span === 0) ? Math.floor((rowLeft + rowRight) / 2) : Math.floor(rowLeft + (rowRight - rowLeft) * (col / span));
+      const t = { ...topping, id: Phaser.Utils.String.UUID() + '-' + i, _x: x, _y: Math.floor(y), _placed: false };
+      toppings.push(t);
+    }
+
+    // clamp any newly-added toppings to the valid txArea so they always spawn inside the cup
+    try {
+      const endIndex = toppings.length;
+      for (let i = startIndex; i < endIndex; i++) {
+        const tt = toppings[i];
+        if (!tt) continue;
+        const padLocal = Math.max(4, Math.floor((tt && tt._r) || pearlR));
+        if (typeof tt._x === 'number') tt._x = Phaser.Math.Clamp(tt._x, left + padLocal, right - padLocal);
+        if (typeof tt._y === 'number') tt._y = Phaser.Math.Clamp(tt._y, topBand + padLocal, bottomBand - padLocal);
+      }
+    } catch (e) {}
+
   } catch (e) {
-  // fallback: simple single placement if anything fails
-  const t = { ...topping, id: Phaser.Utils.String.UUID(), _placed: false };
-  toppings.push(t);
+    // fallback: simple single placement if anything fails
+    const t = { ...topping, id: Phaser.Utils.String.UUID(), _placed: false };
+    toppings.push(t);
   }
   drawCup(scene);
 }
@@ -2105,47 +2704,66 @@ function addToppingToMaker(scene, item, index) {
     .on('pointerover', () => scene.tweens.add({ targets: btn, scale: 1.03, duration: 120 }))
     .on('pointerout', () => scene.tweens.add({ targets: btn, scale: 1.0, duration: 120 }));
   makerToppingsContent.add(btn);
-  // Replace textual label with the image when the topping is Boba
-  try {
-    if (item.key === 'Boba') {
-      if (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img')) {
-        const icon = scene.add.image(12, localY - 8, 'Boba_img');
-        icon.setOrigin(0, 0.5);
-        try { icon.setDisplaySize(28, 28); } catch (e) { icon.setScale(0.32); }
-        makerToppingsContent.add(icon);
-      } else {
-        // dynamic load attempt
-        try {
-          const imgEl = new Image();
-          imgEl.crossOrigin = 'anonymous';
-          imgEl.src = './assets/boba_small.png';
-      imgEl.onload = () => {
-            try {
-              if (scene.textures && scene.textures.addImage) {
-                try { scene.textures.addImage('Boba_img', imgEl); } catch (e) {}
-              }
-              try {
-        // remove temporary label if present
-        try { if (label && label.destroy) label.destroy(); } catch (e) {}
-        const icon2 = scene.add.image(12, localY - 8, 'Boba_img');
-        icon2.setOrigin(0, 0.5);
-        try { icon2.setDisplaySize(28, 28); } catch (e) { icon2.setScale(0.32); }
-        makerToppingsContent.add(icon2);
-              } catch (e) { makerToppingsContent.add(label); }
-            } catch (e) { makerToppingsContent.add(label); }
-          };
-          imgEl.onerror = () => { makerToppingsContent.add(label); };
-          makerToppingsContent.add(label);
-        } catch (e) { makerToppingsContent.add(label); }
-      }
-    } else {
-      makerToppingsContent.add(label);
-    }
-  } catch (e) {
-    makerToppingsContent.add(label);
-  }
-  // refresh max scroll
+  try { makerToppingsContent.add(label); } catch (e) {}
   makerToppingsContent._maxScroll = Math.max(0, ownedToppings.length * slotH - makerToppingsContent._visibleHeight);
+}
+
+// Refresh Maker UI lists to reflect the current ownedFlavors and ownedToppings
+function updateMakerUI(scene) {
+  try {
+    if (!scene) scene = window._boba_scene;
+    // Update flavors
+    if (makerFlavorsContent && Array.isArray(ownedFlavors)) {
+      // collect displayed flavor keys (text children)
+      const displayed = new Set();
+      try {
+        (makerFlavorsContent.list || []).forEach(ch => {
+          try { if (ch && ch.type === 'Text' && typeof ch.text === 'string') displayed.add(ch.text); } catch (e) {}
+        });
+      } catch (e) {}
+      // determine how many flavor slots are already present (text labels count as one per slot)
+      let nextFlavorIndex = 0;
+      try {
+        // count existing flavor labels to infer next index
+        const labels = (makerFlavorsContent.list || []).filter(ch => ch && ch.type === 'Text');
+        nextFlavorIndex = labels.length;
+      } catch (e) { nextFlavorIndex = (makerFlavorsContent._displayedCount || 0); }
+      // append any owned flavors not yet displayed (preserve existing ones)
+      ownedFlavors.forEach((f) => {
+        try {
+          const key = (f && f.key) ? f.key : String(f);
+          if (!displayed.has(key)) {
+            addFlavorToMaker(scene, f, nextFlavorIndex);
+            nextFlavorIndex += 1;
+          }
+        } catch (e) {}
+      });
+    }
+    // Update toppings
+    if (makerToppingsContent && Array.isArray(ownedToppings)) {
+      const displayedT = new Set();
+      try {
+        (makerToppingsContent.list || []).forEach(ch => {
+          try { if (ch && ch.type === 'Text' && typeof ch.text === 'string') displayedT.add(ch.text); } catch (e) {}
+        });
+      } catch (e) {}
+      // compute next topping index based on existing Text children
+      let nextToppingIndex = 0;
+      try {
+        const tlabels = (makerToppingsContent.list || []).filter(ch => ch && ch.type === 'Text');
+        nextToppingIndex = tlabels.length;
+      } catch (e) { nextToppingIndex = (makerToppingsContent._displayedCount || 0); }
+      ownedToppings.forEach((t) => {
+        try {
+          const key = (t && t.key) ? t.key : String(t);
+          if (!displayedT.has(key)) {
+            addToppingToMaker(scene, t, nextToppingIndex);
+            nextToppingIndex += 1;
+          }
+        } catch (e) {}
+      });
+    }
+  } catch (e) {}
 }
 
 
@@ -2182,6 +2800,15 @@ function serveDrink(scene) {
       if (allDone) {
         // completed an entire order
         dayServedCount = (typeof dayServedCount === 'number') ? dayServedCount + 1 : 1;
+        // award a coin for special customers (special visuals or story)
+        try {
+          const imgKey = parent && parent.appearance && parent.appearance.imageKey;
+          if (isSpecialAppearance(imgKey) || parent && parent._isStory) {
+            coins = (typeof coins === 'number') ? coins + 1 : 1;
+            try { if (coinText) coinText.setText(`Coins: ${coins}`); } catch (e) {}
+            try { window._coins = coins; } catch (e) {}
+          }
+        } catch (e) {}
   try { markCharacterCollected(parent && parent.appearance && parent.appearance.imageKey); } catch (e) {}
         scene.time.delayedCall(900, () => {
           try { clearExtraBoba(); } catch (e) {}
@@ -2232,6 +2859,15 @@ function serveDrink(scene) {
         dayServedCount = (typeof dayServedCount === 'number') ? dayServedCount + 1 : 1;
   try { markCharacterCollected(activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey); } catch (e) {}
   try { clearExtraBoba(); } catch (e) {}
+  // award a coin for special customers
+  try {
+    const imgKey = activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey;
+    if (isSpecialAppearance(imgKey) || activeOrder && activeOrder._isStory) {
+      coins = (typeof coins === 'number') ? coins + 1 : 1;
+      try { if (coinText) coinText.setText(`Coins: ${coins}`); } catch (e) {}
+      try { window._coins = coins; } catch (e) {}
+    }
+  } catch (e) {}
   activeOrder = generateRandomOrder();
   refreshOrdersUI(scene);
   showOrdersScreen(scene);
@@ -2286,6 +2922,15 @@ function autoCompleteActiveOrder(scene) {
           // otherwise spawn next
           try { markCharacterCollected(parent && parent.appearance && parent.appearance.imageKey); } catch (e) {}
           try { clearExtraBoba(); } catch (e) {}
+          // award a coin for special customers
+          try {
+            const imgKey = parent && parent.appearance && parent.appearance.imageKey;
+            if (isSpecialAppearance(imgKey) || parent && parent._isStory) {
+              coins = (typeof coins === 'number') ? coins + 1 : 1;
+              try { if (coinText) coinText.setText(`Coins: ${coins}`); } catch (e) {}
+              try { window._coins = coins; } catch (e) {}
+            }
+          } catch (e) {}
           scene.time.delayedCall(700, () => {
             activeOrder = generateRandomOrder();
             try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
@@ -2312,6 +2957,15 @@ function autoCompleteActiveOrder(scene) {
       dayServedCount = (typeof dayServedCount === 'number') ? dayServedCount + 1 : 1;
   try { markCharacterCollected(activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey); } catch (e) {}
       try { clearExtraBoba(); } catch (e) {}
+      // award a coin for special customers
+      try {
+        const imgKey = activeOrder && activeOrder.appearance && activeOrder.appearance.imageKey;
+        if (isSpecialAppearance(imgKey) || activeOrder && activeOrder._isStory) {
+          coins = (typeof coins === 'number') ? coins + 1 : 1;
+          try { if (coinText) coinText.setText(`Coins: ${coins}`); } catch (e) {}
+          try { window._coins = coins; } catch (e) {}
+        }
+      } catch (e) {}
       // if reached day end, show summary overlay
       try { if (dayServedCount >= 7) { showDayOver(scene); return; } } catch (e) {}
       // spawn next customer after a small delay so animations can play
@@ -2388,7 +3042,9 @@ function drawCup(scene) {
   const liquidBottom = Math.floor(h/2);
   let baseLiquidHeight = liquidBottom - liquidTop;
   // use fillProgress (0..1) to animate filling; default to 1 when not set
-  const fp = (cupSprites.fillProgress == null) ? 1 : cupSprites.fillProgress;
+  let fp = (cupSprites.fillProgress == null) ? 1 : cupSprites.fillProgress;
+  // If no flavor is selected, the cup should remain empty (no drink preview when changing size)
+  if (!selectedFlavor) fp = 0;
   // clamp fillProgress
   const clampedFp = Math.max(0, Math.min(1, fp));
   let liquidHeight = Math.max(8, Math.floor(baseLiquidHeight * clampedFp));
@@ -2430,6 +3086,100 @@ function drawCup(scene) {
   glare.fillEllipseShape(new Phaser.Geom.Ellipse(-halfWidthAtY*0.22, currentTopY + Math.max(6, Math.floor(liquidHeight*0.06)), halfWidthAtY*0.24, Math.max(8, Math.floor(liquidHeight*0.5))));
   c.add(glare);
 
+  // per-flavor liquid decorations (small speckles, dots, leaves, etc.) to better match flavor names
+  try {
+    // Only generate decorations when a flavor is actually selected and the cup has visible fill
+    if (selectedFlavor && clampedFp > 0) {
+      const deco = scene.add.container(0, 0);
+      // define an internal helper to add a speckle
+      const addSpeck = (cx, cy, r, col, alpha) => {
+        const g = scene.add.circle(cx, cy, r, col).setAlpha(alpha || 0.95).setStrokeStyle(0, 0x000000, 0);
+        deco.add(g);
+      };
+      const addShard = (cx, cy, size, col) => {
+        const poly = scene.add.polygon(cx, cy, [0,-size, size/2,0,0,size,-size/2,0], col).setStrokeStyle(0, 0x000000, 0);
+        deco.add(poly);
+      };
+      const addLeaf = (cx, cy, w, h, col) => {
+        const leaf = scene.add.ellipse(cx, cy, w, h, col).setAngle(20).setAlpha(0.95).setStrokeStyle(0, 0x000000, 0);
+        deco.add(leaf);
+      };
+      // small diamond sparkle helper (rotated square / diamond)
+      const addDiamond = (cx, cy, size, col, alpha) => {
+        const pts = [0, -size, size, 0, 0, size, -size, 0];
+        const d = scene.add.polygon(cx, cy, pts, col).setAlpha(alpha || 0.95).setStrokeStyle(1, 0x000000);
+        deco.add(d);
+      };
+      // pick decoration placement vertical area inside liquid top..bottom band
+      const decoTop = currentTopY + 4;
+      const decoBottom = liquidBottom - 6;
+      // helper: for a given world Y compute the half-inner width at that Y (taper interpolation)
+      const computeHalfWidthAtY = (yy) => {
+        try {
+          const interpY = (yy - liquidTop) / Math.max(1, (liquidBottom - liquidTop));
+          const clamped = Phaser.Math.Clamp(interpY, 0, 1);
+          return halfInnerTopW + (halfInnerBottomW - halfInnerTopW) * clamped;
+        } catch (e) { return halfInnerBottomW / 2; }
+      };
+      // helper: pick a random X that is guaranteed inside the tapered cup at Y
+      const pickXForY = (yy, pad) => {
+        try {
+          const half = computeHalfWidthAtY(yy);
+          const leftBound = -half + (pad || 8);
+          const rightBound = half - (pad || 8);
+          // ensure left <= right
+          const l = Math.min(leftBound, rightBound);
+          const r = Math.max(leftBound, rightBound);
+          return Phaser.Math.Between(Math.floor(l), Math.floor(r));
+        } catch (e) { return Phaser.Math.Between(-Math.floor(halfInnerBottomW/2)+8, Math.floor(halfInnerBottomW/2)-8); }
+      };
+      const flavorKey = selectedFlavor ? (selectedFlavor.key || '').toLowerCase() : '';
+      // create a few decorations depending on flavor
+      if (flavorKey.indexOf('oreo') !== -1 || flavorKey.indexOf('cookies') !== -1) {
+        // cookies and cream: small black dots (cookie bits)
+        for (let i=0;i<20;i++) {
+          const ry = Phaser.Math.Between(decoTop, decoBottom);
+          const rx = pickXForY(ry, 2);
+          addSpeck(rx, ry, Phaser.Math.Between(1,2), 0x1f1f1f, 0.95);
+        }
+      } else if (flavorKey.indexOf('matcha') !== -1 || flavorKey.indexOf('green tea') !== -1 || flavorKey.indexOf('genmaicha') !== -1) {
+        // greenish leaves / flecks
+        for (let i=0;i<8;i++) {
+          const ry = Phaser.Math.Between(decoTop, decoBottom);
+          const rx = pickXForY(ry, 4);
+          addLeaf(rx, ry, Phaser.Math.Between(6,10), Phaser.Math.Between(3,6), 0x7fcf8a);
+        }
+        // genmaicha: add toasted rice shards
+        if (flavorKey.indexOf('genmaicha') !== -1) {
+          for (let i=0;i<6;i++) { const ry = Phaser.Math.Between(decoTop, decoBottom); addShard(pickXForY(ry,3), ry, Phaser.Math.Between(4,8), 0xd9cfa3); }
+        }
+      } else if (flavorKey.indexOf('toasted marshmallow') !== -1 || flavorKey.indexOf('churro') !== -1 || flavorKey.indexOf('chai') !== -1) {
+        // warm spice flecks and tiny caramel shards
+        for (let i=0;i<10;i++) { const ry=Phaser.Math.Between(decoTop,decoBottom); addSpeck(pickXForY(ry,2), ry, Phaser.Math.Between(1,3), 0x8b5a3a, 0.9); }
+        for (let i=0;i<6;i++) { const ry=Phaser.Math.Between(decoTop,decoBottom); addShard(pickXForY(ry,3), ry, Phaser.Math.Between(3,7), 0xe0a36b); }
+      } else if (flavorKey.indexOf('banana') !== -1 || flavorKey.indexOf('mango') !== -1 || flavorKey.indexOf('avocado') !== -1) {
+        // fruit bits as small rounded rectangles (use small circles here)
+        for (let i=0;i<8;i++) { const ry=Phaser.Math.Between(decoTop,decoBottom); addSpeck(pickXForY(ry,3), ry, Phaser.Math.Between(2,4), (flavorKey.indexOf('banana')!==-1)?0xfff2a8:0xffd28a, 0.95); }
+      } else if (flavorKey.indexOf('lemon') !== -1 || flavorKey.indexOf('honey') !== -1) {
+        // lemon: tiny citrus pith dots and honey streaks
+        for (let i=0;i<12;i++) { const ry=Phaser.Math.Between(decoTop,decoBottom); addSpeck(pickXForY(ry,2), ry, 1, 0xfff6a8, 0.9); }
+      } else if (flavorKey.indexOf('peppermint') !== -1 || flavorKey.indexOf('mint') !== -1) {
+        // peppermint cocoa: red diamond sparkles instead of white shards
+        for (let i = 0; i < 10; i++) {
+          const ry = Phaser.Math.Between(decoTop, decoBottom);
+          const rx = pickXForY(ry, 2);
+          addDiamond(rx, ry, Phaser.Math.Between(2, 4), 0xff4d4d, 0.98);
+        }
+      } else if (flavorKey.indexOf('soy') !== -1 || flavorKey.indexOf('vanilla') !== -1) {
+        // creamy vanilla/soy: a few soft white glints
+        for (let i=0;i<6;i++) { const ry=Phaser.Math.Between(decoTop,decoBottom); addSpeck(pickXForY(ry,3), ry, Phaser.Math.Between(2,4), 0xffffff, 0.65); }
+      }
+      // add deco container at correct depth: under toppings but above liquid/glare
+      deco.setDepth(1750);
+      c.add(deco);
+    }
+  } catch (e) {}
+
   // lid removed per request (no top oval)
 
   // (old straw visuals removed - replaced by full straw drawn earlier and upper straw piece later)
@@ -2454,8 +3204,12 @@ function drawCup(scene) {
   const totalT = toppings.length;
   for (let idx = 0; idx < totalT; idx++) {
     const t = toppings[idx];
-    // estimate a radius/size for spacing
-    const estRadius = (t.key === 'Boba') ? Math.max(6, Math.floor(cupRadius * 0.06)) : (t.key === 'Pudding' ? Math.max(12, Math.floor(cupRadius * 0.12)) : Math.max(10, Math.floor(cupRadius * 0.1)));
+  // estimate a radius/size for spacing
+  const estRadius = (t.key === 'Boba') ? Math.max(6, Math.floor(cupRadius * 0.06)) : (t.key === 'Pudding' ? Math.max(12, Math.floor(cupRadius * 0.12)) : Math.max(10, Math.floor(cupRadius * 0.1)));
+  // unify small topping pearl sizes to be closer to Boba's visual size
+  const pearlR = Math.max(6, Math.floor(cupRadius * 0.06));
+  // small specks / crumbs
+  const smallDotR = Math.max(1, Math.floor(pearlR * 0.45));
     const minDist = estRadius * 2 + 6;
     let x, y;
     // if this topping already has a stored position, reuse it so it doesn't move
@@ -2482,47 +3236,46 @@ function drawCup(scene) {
     }
     placed.push({ x, y, r: estRadius });
 
-    if (t.key === 'Boba') {
+  if (t.key === 'Boba') {
       // Render boba pearls using the preloaded image if available
       const radius = estRadius;
       try {
         if (scene.textures && scene.textures.exists && scene.textures.exists('Boba_img')) {
+          // draw a thin black outline behind the sprite so it reads with a consistent border
+          const outlineR = Math.max(6, Math.floor(radius * 1.1));
+          const outline = scene.add.circle(x, y, outlineR, 0x000000).setAlpha(0).setStrokeStyle(0, 0x000000);
+          try { outline.setDepth(1799); } catch (e) {}
+          c.add(outline);
           const img = scene.add.image(x, y, 'Boba_img');
           img.setOrigin(0.5);
           // size the image to roughly match the expected pearl radius
           let desired = Math.max(6, Math.floor(radius * 2));
-          try {
-            img.setDisplaySize(desired, desired);
-          } catch (e) {
-            // fallback to a small scale
-            try { img.setScale(0.3); } catch (e) {}
-            desired = null;
-          }
+          try { img.setDisplaySize(desired, desired); } catch (e) { try { img.setScale(0.3); } catch (e) {} desired = null; }
           try { console.log('drawCup: Boba_img texture exists, creating pearl image', { x, y, desired }); } catch (e) {}
           // add and animate from small -> final display size (use scale tween to 1.0)
           c.add(img);
           try { img.setDepth(1800); } catch (e) {}
           if (!t._placed) {
             try {
+              outline.setAlpha(1);
+              outline.setScale(0.2);
               img.setScale(0.12);
-              scene.tweens.add({ targets: img, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
+              img.setAlpha(0);
+              scene.tweens.add({ targets: [outline, img], scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' });
             } catch (e) {
-              try { img.setScale(1.0); } catch (e) {}
+              try { img.setScale(1.0); img.setAlpha(1.0); outline.setAlpha(1); } catch (e) {}
             }
             t._placed = true;
           }
         } else {
           try { console.log('drawCup: Boba_img texture missing, falling back to circles for boba'); } catch (e) {}
           // fallback to colored circle if image missing
-          const b = scene.add.circle(x, y, radius, t.color).setStrokeStyle(1, 0x241f1f).setAlpha(0.98);
+          const b = scene.add.circle(x, y, radius, t.color).setStrokeStyle(1, 0x000000).setAlpha(0.98);
           const sb = scene.add.ellipse(x - Math.floor(radius * 0.35), y - Math.floor(radius * 0.35), Math.max(3, radius * 0.4), Math.max(2, radius * 0.3), 0xffffff).setAlpha(0.6);
           c.add(b);
           c.add(sb);
           if (!t._placed) {
-            b.setScale(0.2);
-            scene.tweens.add({ targets: b, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
-            sb.setScale(0.2);
-            scene.tweens.add({ targets: sb, scale: 1.0, duration: 260, ease: 'Back.easeOut' });
+            try { b.setScale(0.2); b.setAlpha(0); sb.setAlpha(0); scene.tweens.add({ targets: [b, sb], scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { b.setScale(1); b.setAlpha(1); sb.setAlpha(1); } catch (e) {} }
             t._placed = true;
           }
         }
@@ -2530,39 +3283,233 @@ function drawCup(scene) {
         // safe fallback
       }
     } else if (t.key === 'Mochi') {
+      // soft rectangular mochi with a small highlight
       const w = Math.max(14, cupRadius * 0.14);
       const hrect = Math.max(10, cupRadius * 0.06);
-      const r = scene.add.rectangle(x, y, w, hrect, t.color).setAngle(10).setStrokeStyle(1, 0xa06b7a).setAlpha(0.98);
+      const rct = scene.add.roundedRect ? scene.add.roundedRect(x, y, w, hrect, 6, t.color) : scene.add.rectangle(x, y, w, hrect, t.color);
+      try { if (rct.setStrokeStyle) rct.setStrokeStyle(1, 0x000000); } catch (e) {}
       const hm = scene.add.ellipse(x - Math.floor(w * 0.2), y - Math.floor(hrect * 0.25), Math.max(6, w * 0.25), Math.max(4, hrect * 0.45), 0xffffff).setAlpha(0.5);
-      c.add(r);
+      c.add(rct);
       c.add(hm);
       if (!t._placed) {
-        r.setScale(0.4);
-        scene.tweens.add({ targets: r, scale: 1.0, duration: 300, ease: 'Back.easeOut' });
-        hm.setScale(0.4);
-        scene.tweens.add({ targets: hm, scale: 1.0, duration: 300, ease: 'Back.easeOut' });
+        try { rct.setScale(0.4); rct.setAlpha(0); hm.setAlpha(0); scene.tweens.add({ targets: [rct, hm], scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { rct.setScale(1); rct.setAlpha(1); hm.setAlpha(1); } catch (e) {} }
         t._placed = true;
       }
-    } else if (t.key === 'Pudding') {
-      const p = scene.add.ellipse(x, y, Math.max(24, cupRadius * 0.26), Math.max(14, cupRadius * 0.12), t.color).setStrokeStyle(1, 0xcaa86a).setAlpha(0.98);
+    } else if (t.key === 'Pudding' || t.key === 'Egg Pudding') {
+      // custard-like semi-oval with caramel top
+      const p = scene.add.ellipse(x, y, Math.max(24, cupRadius * 0.26), Math.max(14, cupRadius * 0.12), t.color).setStrokeStyle(1, 0x000000).setAlpha(0.98);
       const hp = scene.add.ellipse(x - 6, y - 6, Math.max(6, cupRadius * 0.12), Math.max(4, cupRadius * 0.07), 0xffffff).setAlpha(0.55);
+      // caramel top for egg pudding
+      if (String(t.key).toLowerCase().indexOf('egg') !== -1) {
+        const caramel = scene.add.ellipse(x, y - Math.floor(cupRadius * 0.06), Math.max(20, cupRadius * 0.18), Math.max(8, cupRadius * 0.06), 0xcc8b3a).setAlpha(0.95);
+        try { caramel.setStrokeStyle(1, 0x000000); } catch (e) {}
+        c.add(caramel);
+      }
       c.add(p);
       c.add(hp);
       if (!t._placed) {
-        p.setScale(0.4);
-        scene.tweens.add({ targets: p, scale: 1.0, duration: 300, ease: 'Back.easeOut' });
-        hp.setScale(0.4);
-        scene.tweens.add({ targets: hp, scale: 1.0, duration: 300, ease: 'Back.easeOut' });
+        try { p.setScale(0.4); p.setAlpha(0); hp.setAlpha(0); scene.tweens.add({ targets: [p, hp], scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { p.setScale(1); p.setAlpha(1); hp.setAlpha(1); } catch (e) {} }
         t._placed = true;
       }
-    } else {
-      const poly = scene.add.polygon(x, y, [0, -10, 10, 0, 0, 10, -10, 0], t.color).setStrokeStyle(1, 0x4b9fb8).setAlpha(0.96);
-      c.add(poly);
+    } else if (t.key === 'Red Bean') {
+      // cluster of small red-brown beans
+      const group = scene.add.container(x, y);
+      for (let i = 0; i < 5; i++) {
+        const rx = Phaser.Math.Between(-8, 8);
+        const ry = Phaser.Math.Between(-6, 6);
+        const rb = scene.add.ellipse(rx, ry, 6, 4, 0xbf6b6b).setStrokeStyle(1, 0x000000);
+        group.add(rb);
+      }
+      c.add(group);
+      if (!t._placed) { try { group.setScale(0.4); group.setAlpha(0); scene.tweens.add({ targets: group, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { group.setScale(1); group.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Aloe') {
+      // small green translucent cubes (aloe chunks)
+      const g1 = scene.add.rectangle(x, y, 10, 10, 0x9be6b8).setAlpha(0.9).setStrokeStyle(1, 0x000000);
+      c.add(g1);
+      if (!t._placed) { try { g1.setScale(0.4); g1.setAlpha(0); scene.tweens.add({ targets: g1, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { g1.setScale(1); g1.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Coconut') {
+      // white coconut flakes
+      const flakes = scene.add.container(x, y);
+      for (let i = 0; i < 6; i++) {
+        const fx = Phaser.Math.Between(-8, 8);
+        const fy = Phaser.Math.Between(-6, 6);
+        const fl = scene.add.rectangle(fx, fy, 4, 8, 0xffffff).setAngle(Phaser.Math.Between(0, 360)).setStrokeStyle(1, 0x000000).setAlpha(0.95);
+        flakes.add(fl);
+      }
+      c.add(flakes);
+      if (!t._placed) { try { flakes.setScale(0.4); flakes.setAlpha(0); scene.tweens.add({ targets: flakes, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { flakes.setScale(1); flakes.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Grass Jelly') {
+      const gj = scene.add.rectangle(x, y, Math.max(18, estRadius * 2), Math.max(10, estRadius), 0x3b6b6b).setAlpha(0.95).setStrokeStyle(1, 0x000000);
+      c.add(gj);
+      if (!t._placed) { try { gj.setScale(0.4); gj.setAlpha(0); scene.tweens.add({ targets: gj, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { gj.setScale(1); gj.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Popping Boba') {
+      // single popping pearl per topping instance (we create multiple instances in addTopping)
+      const colors = [0xffb3d9, 0xffe36b, 0xdde6ff, 0xa6d393, 0xffc66b];
+      const col = Phaser.Utils.Array.GetRandom(colors);
+      const s = scene.add.circle(x, y, pearlR, col).setStrokeStyle(1, 0x000000).setAlpha(0.98);
+      c.add(s);
       if (!t._placed) {
-        poly.setScale(0.4);
-        scene.tweens.add({ targets: poly, scale: 1.0, duration: 300, ease: 'Back.easeOut' });
+        try { s.setScale(0.4); s.setAlpha(0); scene.tweens.add({ targets: s, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { s.setScale(1); s.setAlpha(1); } catch (e) {} }
         t._placed = true;
       }
+    } else if (t.key === 'Crystal Boba') {
+      // single translucent bluish pearl per instance
+      const gem = scene.add.circle(x, y, pearlR, 0xdde6ff).setAlpha(0.9).setStrokeStyle(1, 0x000000);
+      c.add(gem);
+      if (!t._placed) { try { gem.setScale(0.4); gem.setAlpha(0); scene.tweens.add({ targets: gem, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { gem.setScale(1); gem.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Coffee Jelly' || t.key === 'Tapioca') {
+      // coffee jelly as small brown cubes; tapioca as darker pearls
+      if (String(t.key).toLowerCase().indexOf('coffee') !== -1) {
+        const g3 = scene.add.container(x, y);
+        for (let i = 0; i < 4; i++) {
+          const rx = Phaser.Math.Between(-6, 6);
+          const ry = Phaser.Math.Between(-4, 4);
+          const cube = scene.add.rectangle(rx, ry, 6, 6, 0x6b4f3b).setStrokeStyle(1, 0x000000).setAlpha(0.98);
+          g3.add(cube);
+        }
+        c.add(g3);
+        if (!t._placed) { try { g3.setScale(0.4); g3.setAlpha(0); scene.tweens.add({ targets: g3, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { g3.setScale(1); g3.setAlpha(1); } catch (e) {} } t._placed = true; }
+      } else {
+        // tapioca: draw a single dark pearl per instance
+        const p = scene.add.circle(x, y, pearlR, 0x3a2f2f).setStrokeStyle(1, 0x000000);
+        c.add(p);
+        if (!t._placed) { try { p.setScale(0.4); p.setAlpha(0); scene.tweens.add({ targets: p, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { p.setScale(1); p.setAlpha(1); } catch (e) {} } t._placed = true; }
+      }
+    } else if (t.key === 'Taro Balls') {
+      // single taro-colored pearl
+      const s = scene.add.circle(x, y, pearlR, 0xd7b3ff).setStrokeStyle(1, 0x000000);
+      c.add(s);
+      if (!t._placed) { try { s.setScale(0.4); s.setAlpha(0); scene.tweens.add({ targets: s, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { s.setScale(1); s.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Marshmallow') {
+      const mm = scene.add.ellipse(x, y, Math.max(10, estRadius*1.2), Math.max(6, estRadius*0.8), 0xfff0f0).setStrokeStyle(1, 0x000000).setAlpha(0.98);
+      c.add(mm);
+      if (!t._placed) { try { mm.setScale(0.4); mm.setAlpha(0); scene.tweens.add({ targets: mm, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { mm.setScale(1); mm.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Mango Bits') {
+      const s = scene.add.rectangle(x, y, 8, 6, 0xffd28a).setStrokeStyle(1, 0x000000);
+      c.add(s);
+      if (!t._placed) { try { s.setScale(0.4); s.setAlpha(0); scene.tweens.add({ targets: s, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { s.setScale(1); s.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Rainbow Jelly' || t.key === 'Rainbow Boba') {
+      // single colorful representative element
+      const colsR = [0xffb3ff, 0xffe36b, 0xdde6ff, 0xa6d393, 0xff6ec7];
+      if (String(t.key).toLowerCase().indexOf('boba') !== -1) {
+        const s = scene.add.circle(x, y, pearlR, Phaser.Utils.Array.GetRandom(colsR)).setStrokeStyle(1, 0x000000);
+        c.add(s);
+        if (!t._placed) { try { s.setScale(0.4); s.setAlpha(0); scene.tweens.add({ targets: s, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { s.setScale(1); s.setAlpha(1); } catch (e) {} } t._placed = true; }
+      } else {
+        const shard = scene.add.polygon(x, y, [0, -6, 4, 0, 0, 6, -4, 0], Phaser.Utils.Array.GetRandom(colsR)).setStrokeStyle(1, 0x000000);
+        c.add(shard);
+        if (!t._placed) { try { shard.setScale(0.4); shard.setAlpha(0); scene.tweens.add({ targets: shard, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { shard.setScale(1); shard.setAlpha(1); } catch (e) {} } t._placed = true; }
+      }
+    } else if (t.key === 'Chia Seeds') {
+      // single chia dot
+      const d = scene.add.circle(x, y, smallDotR, 0x000000);
+      c.add(d);
+      if (!t._placed) { try { d.setScale(0.6); d.setAlpha(0); scene.tweens.add({ targets: d, scale: 1.0, alpha: 1.0, duration: 220, ease: 'Quad.easeOut' }); } catch (e) { try { d.setScale(1); d.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Oat Granola') {
+      const r = scene.add.rectangle(x, y, 8, 4, 0xd6caae).setStrokeStyle(1, 0x000000);
+      c.add(r);
+      if (!t._placed) { try { r.setScale(0.5); r.setAlpha(0); scene.tweens.add({ targets: r, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { r.setScale(1); r.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Honey Pearls') {
+      const s = scene.add.circle(x, y, pearlR, 0xffdca3).setStrokeStyle(1, 0x000000);
+      c.add(s);
+      if (!t._placed) { try { s.setScale(0.4); s.setAlpha(0); scene.tweens.add({ targets: s, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { s.setScale(1); s.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Cookie') {
+      const cookie = scene.add.circle(x, y, Math.max(10, estRadius * 1.1), 0xd2b48c).setStrokeStyle(2, 0x6b4f3b).setAlpha(0.98);
+      // a few fixed chips around center
+      const chip1 = scene.add.circle(x - 4, y - 2, 2, 0x6b4f3b);
+      const chip2 = scene.add.circle(x + 3, y + 1, 2, 0x6b4f3b);
+      c.add(cookie); c.add(chip1); c.add(chip2);
+      if (!t._placed) { try { cookie.setScale(0.4); cookie.setAlpha(0); chip1.setAlpha(0); chip2.setAlpha(0); scene.tweens.add({ targets: [cookie, chip1, chip2], scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { cookie.setScale(1); cookie.setAlpha(1); chip1.setAlpha(1); chip2.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Mystery Boba') {
+      // single mystery pearl (deterministic color per instance)
+      if (!t._mysteryColor) t._mysteryColor = Phaser.Display.Color.Random().color;
+      const s = scene.add.circle(x, y, pearlR, t._mysteryColor).setStrokeStyle(1, 0x000000);
+      c.add(s);
+      if (!t._placed) { try { s.setScale(0.4); s.setAlpha(0); scene.tweens.add({ targets: s, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { s.setScale(1); s.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Sun Jelly') {
+      // translucent yellow blob (sunny jelly)
+      const sj = scene.add.polygon(x, y, [0,-12,6,-2,12,0,6,4,0,12,-6,4,-12,0,-6,-2], 0xffe36b).setAlpha(0.9).setStrokeStyle(1, 0x000000);
+      c.add(sj);
+      if (!t._placed) { try { sj.setScale(0.4); sj.setAlpha(0); scene.tweens.add({ targets: sj, scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { sj.setScale(1); sj.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Star Boba') {
+      // keep star boba as implemented
+      const rOuter = Math.max(10, Math.floor(estRadius * 1.2));
+      const rInner = Math.max(4, Math.floor(rOuter * 0.45));
+      const pts = [];
+      for (let i = 0; i < 5; i++) {
+        const angleOuter = -Math.PI / 2 + i * (2 * Math.PI / 5);
+        const angleInner = angleOuter + Math.PI / 5;
+        pts.push(Math.round(rOuter * Math.cos(angleOuter)), Math.round(rOuter * Math.sin(angleOuter)));
+        pts.push(Math.round(rInner * Math.cos(angleInner)), Math.round(rInner * Math.sin(angleInner)));
+      }
+      const star = scene.add.polygon(x, y, pts, t.color).setStrokeStyle(2, 0x000000).setAlpha(0.98);
+      c.add(star);
+      if (!t._placed) { try { star.setScale(0.4); star.setAlpha(0); scene.tweens.add({ targets: star, scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { star.setScale(1); star.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Matcha Boba') {
+      const p = scene.add.circle(x, y, pearlR, 0x2f7b3a).setStrokeStyle(1, 0x000000);
+      c.add(p);
+      if (!t._placed) { try { p.setScale(0.4); p.setAlpha(0); scene.tweens.add({ targets: p, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { p.setScale(1); p.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Yogurt Boba') {
+      const p = scene.add.circle(x, y, pearlR, 0xf6f7f9).setStrokeStyle(1, 0x000000).setAlpha(0.98);
+      const s = scene.add.circle(x + 3, y - 2, smallDotR, 0xfff2e6);
+      c.add(p); c.add(s);
+      if (!t._placed) { try { p.setScale(0.4); p.setAlpha(0); s.setAlpha(0); scene.tweens.add({ targets: [p, s], scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { p.setScale(1); p.setAlpha(1); s.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Custard Cubes') {
+      const cube = scene.add.rectangle(x, y, 10, 8, 0xf0c969).setStrokeStyle(1, 0x6b4f3b).setAlpha(0.98);
+      c.add(cube);
+      if (!t._placed) { try { cube.setScale(0.4); cube.setAlpha(0); scene.tweens.add({ targets: cube, scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { cube.setScale(1); cube.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Sweet Corn') {
+      const k = scene.add.ellipse(x, y, 8, 6, 0xfff6a8).setStrokeStyle(1, 0x6b4f3b);
+      c.add(k);
+      if (!t._placed) { try { k.setScale(0.4); k.setAlpha(0); scene.tweens.add({ targets: k, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { k.setScale(1); k.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Sea Salt Caramel Cubes') {
+      const cube = scene.add.rectangle(x, y, 10, 8, 0xd9b38a).setStrokeStyle(1, 0x5a3f2a);
+      const shine = scene.add.ellipse(x - 2, y - 3, 6, 3, 0xfff6e0).setAlpha(0.35);
+      c.add(cube); c.add(shine);
+      if (!t._placed) { try { cube.setScale(0.4); cube.setAlpha(0); shine.setAlpha(0); scene.tweens.add({ targets: [cube, shine], scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { cube.setScale(1); cube.setAlpha(1); shine.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Pistachio Crumbs') {
+      // a few small deterministic crumbs
+      const cr1 = scene.add.circle(x - 3, y - 2, smallDotR, 0x8fb38a).setStrokeStyle(1, 0x3f4f3f);
+      const cr2 = scene.add.circle(x + 2, y + 1, smallDotR, 0x8fb38a).setStrokeStyle(1, 0x3f4f3f);
+      c.add(cr1); c.add(cr2);
+      if (!t._placed) { try { cr1.setAlpha(0); cr2.setAlpha(0); scene.tweens.add({ targets: [cr1, cr2], alpha: 1.0, duration: 240, ease: 'Quad.easeOut' }); } catch (e) { try { cr1.setAlpha(1); cr2.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Jasmine Pearls') {
+      const p = scene.add.circle(x, y, pearlR, 0xfff2d9).setStrokeStyle(1, 0x000000);
+      const f = scene.add.circle(x + 3, y - 2, smallDotR, 0xffd6b3);
+      c.add(p); c.add(f);
+      if (!t._placed) { try { p.setScale(0.4); p.setAlpha(0); f.setAlpha(0); scene.tweens.add({ targets: [p, f], scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { p.setScale(1); p.setAlpha(1); f.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Lavender Pearls') {
+      const p = scene.add.circle(x, y, pearlR, 0xd7c7ff).setStrokeStyle(1, 0x000000);
+      c.add(p);
+      if (!t._placed) { try { p.setScale(0.4); p.setAlpha(0); scene.tweens.add({ targets: p, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { p.setScale(1); p.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Tea Jelly') {
+      const shard = scene.add.polygon(x, y, [0, -8, 6, 0, 0, 8, -6, 0], 0xb88b5a).setStrokeStyle(1, 0x000000).setAlpha(0.95);
+      c.add(shard);
+      if (!t._placed) { try { shard.setScale(0.4); shard.setAlpha(0); scene.tweens.add({ targets: shard, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { shard.setScale(1); shard.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Ube Pudding') {
+      const up = scene.add.container(x, y);
+      const pud = scene.add.ellipse(0, 0, Math.max(18, estRadius*1.6), Math.max(10, estRadius), 0x6f3fa6).setStrokeStyle(1,0x000000);
+      const shine = scene.add.ellipse(-6, -6, Math.max(8, estRadius*0.6), Math.max(4, estRadius*0.4), 0xffe6ff).setAlpha(0.25);
+      up.add(pud); up.add(shine);
+      c.add(up);
+      if (!t._placed) { try { up.setScale(0.4); up.setAlpha(0); scene.tweens.add({ targets: up, scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { up.setScale(1); up.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Blueberry Jelly') {
+      const shard = scene.add.polygon(x, y, [0, -8, 6, 0, 0, 8, -6, 0], 0x6b5fd9).setStrokeStyle(1, 0x000000);
+      c.add(shard);
+      if (!t._placed) { try { shard.setScale(0.4); shard.setAlpha(0); scene.tweens.add({ targets: shard, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { shard.setScale(1); shard.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Peach Jelly') {
+      const shard = scene.add.polygon(x, y, [0, -8, 6, 0, 0, 8, -6, 0], 0xffc9a8).setStrokeStyle(1, 0x000000);
+      c.add(shard);
+      if (!t._placed) { try { shard.setScale(0.4); shard.setAlpha(0); scene.tweens.add({ targets: shard, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { shard.setScale(1); shard.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else if (t.key === 'Konjac Jelly') {
+      const cube = scene.add.rectangle(x, y, 10, 8, 0xcfcfcf).setStrokeStyle(1, 0x8f8f8f).setAlpha(0.9);
+      c.add(cube);
+      if (!t._placed) { try { cube.setScale(0.4); cube.setAlpha(0); scene.tweens.add({ targets: cube, scale: 1.0, alpha: 1.0, duration: 260, ease: 'Back.easeOut' }); } catch (e) { try { cube.setScale(1); cube.setAlpha(1); } catch (e) {} } t._placed = true; }
+    } else {
+      // default generic shape with black outline
+      const poly = scene.add.polygon(x, y, [0, -10, 10, 0, 0, 10, -10, 0], t.color).setStrokeStyle(1, 0x000000).setAlpha(0.96);
+      c.add(poly);
+      if (!t._placed) { try { poly.setScale(0.4); poly.setAlpha(0); scene.tweens.add({ targets: poly, scale: 1.0, alpha: 1.0, duration: 300, ease: 'Back.easeOut' }); } catch (e) { try { poly.setScale(1); poly.setAlpha(1); } catch (e) {} } t._placed = true; }
     }
   }
 
@@ -2654,7 +3601,16 @@ function generateRandomOrder() {
   if (typeof dayNumber === 'number' && dayNumber % 5 === 0 && lastSpecialShownDay !== dayNumber) {
   const othKeys = ['Lucas','Nathan','Haley','Peyton','Brooke','Callisto'];
   const tvdKeys = ['Stefan','Damon','Elena','Caroline','Bonnie','Callisto'];
-      const specialKeys = othKeys.concat(tvdKeys).filter(Boolean);
+      // include story characters as possible visual specials after day 33
+      let specialKeys = othKeys.concat(tvdKeys).filter(Boolean);
+      try {
+        if (typeof dayNumber === 'number' && dayNumber > 33 && Array.isArray(storyCharacters)) {
+          const storyKeys = (storyCharacters || []).map(s => s.imageKey).filter(Boolean);
+          specialKeys = specialKeys.concat(storyKeys);
+        }
+      } catch (e) {}
+      // dedupe
+      specialKeys = Array.from(new Set(specialKeys)).filter(Boolean);
       if (specialKeys.length > 0) {
         // force Halez.png (asset key 'Haley') on Day 35 specifically
         let pick = null;
@@ -2690,7 +3646,7 @@ function createReceiptUI(scene) {
   const dayW = (dayContainer && dayContainer.bg) ? 160 : 140;
   const startX = Math.floor(dayW + 24);
   // nudge the receipt slightly higher (smaller y) so it sits nearer the top
-  receiptContainer = scene.add.container(startX, 6).setVisible(false);
+  receiptContainer = scene.add.container(startX, 6 + makerYOffset).setVisible(false);
   receiptContainer.setDepth(2000);
   // background panel (distinct pale cream)
   const panel = scene.add.graphics();
@@ -2951,6 +3907,436 @@ function animateCustomerAppearance(scene) {
       }
     } catch (e) {}
   } catch (e) {}
+  // add OTHU badge image on the right side of the Orders panel (hidden by default)
+  try {
+    if (!ordersContainer.othuImage && !ordersContainer._othuDomCreated) {
+  // place relative to the orders panel: move the picture left a lot so it sits nearer the panel content
+  // (this places the image inside/left of the panel area)
+  const imgX = (ordersContainer._panelW || ORDERS_PANEL_W) - 420; // move OTHU left another 30px
+  const imgY = -10; // move OTHU down 20px
+      // prefer Phaser texture if it was loaded successfully
+      try {
+        const hasTex = scene.textures && scene.textures.exists && scene.textures.exists('OTHU');
+        let texHasImage = false;
+        if (hasTex) {
+          try {
+            const tex = scene.textures.get('OTHU');
+            texHasImage = !!(tex && tex.source && tex.source[0] && tex.source[0].image && tex.source[0].image.width);
+          } catch (e) { texHasImage = false; }
+        }
+        if (hasTex && texHasImage) {
+          // Use the texture's original pixel dimensions but clamp to a maximum badge size.
+          try {
+            const MAX_BADGE = 100; // max dimension in px for badges
+            const tex = scene.textures.get('OTHU');
+            const srcImg = tex && tex.source && tex.source[0] && tex.source[0].image ? tex.source[0].image : null;
+            const imgW = (srcImg && srcImg.width) ? srcImg.width : 140;
+            const imgH = (srcImg && srcImg.height) ? srcImg.height : 140;
+            const scale = Math.min(1, MAX_BADGE / Math.max(imgW || 1, imgH || 1));
+            const dispW = Math.max(1, Math.round(imgW * scale));
+            const dispH = Math.max(1, Math.round(imgH * scale));
+            // draw a thin framed background behind the badge so it shows even when using Phaser textures
+            try {
+              const pad = 4;
+              const fx = imgX - pad;
+              const fy = imgY - pad;
+              const fw = dispW + pad * 2;
+              const fh = dispH + pad * 2;
+              const f = scene.add.graphics();
+              try { f.fillStyle(0xffffff, 1); f.fillRoundedRect(fx, fy, fw, fh, 6); } catch (e) {}
+              try { f.lineStyle(1, 0xf8f4f0, 1); f.strokeRoundedRect(fx, fy, fw, fh, 6); } catch (e) {}
+              f.setDepth(1199);
+              f.setVisible(false);
+              ordersContainer.add(f);
+              ordersContainer.othuFrame = f;
+            } catch (e) {}
+            const othu = scene.add.image(imgX, imgY, 'OTHU').setOrigin(0, 0);
+            try { othu.setDisplaySize(dispW, dispD || dispH); } catch (e) {}
+            try { othu.setDisplaySize(dispW, dispH); } catch (e) {}
+            othu.setDepth(1200);
+            othu.setVisible(false);
+            ordersContainer.add(othu);
+            ordersContainer.othuImage = othu;
+            // store clamped dimensions for DOM positioning
+            ordersContainer._othuDomPos = { x: imgX, y: imgY, w: dispW, h: dispH };
+          } catch (e) {
+            const othu = scene.add.image(imgX, imgY, 'OTHU').setOrigin(0, 0);
+            try { othu.setDisplaySize(120, 120); } catch (e) {}
+            othu.setDepth(1200);
+            othu.setVisible(false);
+            ordersContainer.add(othu);
+            ordersContainer.othuImage = othu;
+            ordersContainer._othuDomPos = { x: imgX, y: imgY, w: 100, h: 100 };
+          }
+        } else {
+          // Fallback: create a DOM <img> overlay positioned above the canvas
+          const wrapperId = 'ordersOthuWrap';
+          let wrap = document.getElementById(wrapperId);
+          if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.id = wrapperId;
+            wrap.style.position = 'fixed';
+            wrap.style.zIndex = '9999';
+            wrap.style.display = 'none';
+            wrap.style.pointerEvents = 'auto';
+            // frame-only styling: transparent background, visible border (tight to image)
+            // frame styling to match ShamU persistent postcard
+            wrap.style.background = '#fff';
+            wrap.style.padding = '2px';
+            wrap.style.borderRadius = '6px';
+            wrap.style.boxShadow = '0 8px 30px rgba(0,0,0,0.35)';
+            wrap.style.border = '1px solid #f8f4f0';
+            wrap.style.overflow = 'visible';
+            wrap.style.boxSizing = 'border-box';
+            // inner img
+            const dom = document.createElement('img');
+            dom.id = 'ordersOthuImg';
+            dom.src = './assets/OTHU.png';
+            dom.style.display = 'block';
+            // we'll size the img to the clamped dimensions (100% of wrapper)
+            dom.style.width = '100%';
+            dom.style.height = '100%';
+            dom.style.objectFit = 'contain';
+            dom.style.pointerEvents = 'auto';
+            wrap.appendChild(dom);
+            document.body.appendChild(wrap);
+          }
+          ordersContainer._othuDomCreated = true;
+          try { window._orders_othu_persistent = true; } catch (e) {}
+          // wrapper size will use the clamped dimensions by default (includes padding+border)
+          ordersContainer._othuDomPos = { x: imgX, y: imgY, w: 100 + 2*2 + 1*2, h: 100 + 2*2 + 1*2 };
+          ordersContainer._othuDom = wrap;
+          // position now and on window resize
+          const positionDom = () => {
+            try {
+              const canvas = scene.sys.game && scene.sys.game.canvas ? scene.sys.game.canvas : document.querySelector('#game-container canvas');
+              if (!canvas) return;
+              const rect = canvas.getBoundingClientRect();
+              const scaleX = canvas.clientWidth / (scene.sys.game.config.width || canvas.width || 1);
+              const scaleY = canvas.clientHeight / (scene.sys.game.config.height || canvas.height || 1);
+              const worldX = (ordersContainer.x || 0) + (ordersContainer._othuDomPos.x || 0);
+              const worldY = (ordersContainer.y || 0) + (ordersContainer._othuDomPos.y || 0);
+              const left = Math.round(rect.left + worldX * scaleX);
+              const top = Math.round(rect.top + worldY * scaleY);
+              wrap.style.left = left + 'px';
+              wrap.style.top = top + 'px';
+              wrap.style.width = Math.round((ordersContainer._othuDomPos.w || 84) * scaleX) + 'px';
+              wrap.style.height = Math.round((ordersContainer._othuDomPos.h || 84) * scaleY) + 'px';
+            } catch (e) {}
+          };
+          // store helper so updateOTHUVisibility can show/hide it
+          ordersContainer._othuDom = wrap;
+          try { positionDom(); } catch (e) {}
+          try { window.addEventListener('resize', positionDom); } catch (e) {}
+          // try to size wrapper to the natural image size to avoid cropping
+          try {
+            const MAX_BADGE = 100;
+            const imgEl = wrap.querySelector('img#ordersOthuImg');
+            if (imgEl) {
+              const finalize = (iw, ih) => {
+                const PAD = 2;
+                const BORDER = 1;
+                const scale = Math.min(1, MAX_BADGE / Math.max(iw || 1, ih || 1));
+                const imgW = Math.max(1, Math.round(iw * scale));
+                const imgH = Math.max(1, Math.round(ih * scale));
+                const wrapperW = imgW + PAD * 2 + BORDER * 2;
+                const wrapperH = imgH + PAD * 2 + BORDER * 2;
+                wrap.style.width = wrapperW + 'px';
+                wrap.style.height = wrapperH + 'px';
+                ordersContainer._othuDomPos.w = wrapperW;
+                ordersContainer._othuDomPos.h = wrapperH;
+                try { positionDom(); } catch (e) {}
+              };
+              if (imgEl.complete && imgEl.naturalWidth) {
+                finalize(imgEl.naturalWidth, imgEl.naturalHeight);
+              } else {
+                imgEl.addEventListener('load', () => {
+                  try { finalize(imgEl.naturalWidth || imgEl.width || MAX_BADGE, imgEl.naturalHeight || imgEl.height || MAX_BADGE); } catch (e) {}
+                }, { once: true });
+              }
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+  // add TVDU badge (mirrors OTHU) — hidden by default
+  try {
+    if (!ordersContainer.tvduImage && !ordersContainer._tvduDomCreated) {
+  // move TVDU further right and make it larger
+  const tx = (ordersContainer._panelW || ORDERS_PANEL_W) - 215; // closer to right edge (moved further right)
+      const ty = -25; // moved up 40px
+      try {
+        const hasTex = scene.textures && scene.textures.exists && scene.textures.exists('TVDU');
+        let texHasImage = false;
+        if (hasTex) {
+          try {
+            const tex = scene.textures.get('TVDU');
+            texHasImage = !!(tex && tex.source && tex.source[0] && tex.source[0].image && tex.source[0].image.width);
+          } catch (e) { texHasImage = false; }
+        }
+        if (hasTex && texHasImage) {
+          try {
+            const MAX_BADGE = 140; // reduced size for TVDU
+            const tex = scene.textures.get('TVDU');
+            const srcImg = tex && tex.source && tex.source[0] && tex.source[0].image ? tex.source[0].image : null;
+            const imgW = (srcImg && srcImg.width) ? srcImg.width : 140;
+            const imgH = (srcImg && srcImg.height) ? srcImg.height : 140;
+            const scale = Math.min(1, MAX_BADGE / Math.max(imgW || 1, imgH || 1));
+            const dispW = Math.max(1, Math.round(imgW * scale));
+            const dispH = Math.max(1, Math.round(imgH * scale));
+            const tvdu = scene.add.image(tx, ty, 'TVDU').setOrigin(0, 0);
+            try { tvdu.setDisplaySize(dispW, dispH); } catch (e) {}
+            tvdu.setDepth(1200);
+            tvdu.setVisible(false);
+            ordersContainer.add(tvdu);
+            ordersContainer.tvduImage = tvdu;
+            ordersContainer._tvduDomPos = { x: tx, y: ty, w: dispW, h: dispH };
+            // add thin framed Phaser graphic behind TVDU as well
+            try {
+              const pad2 = 4;
+              const fx2 = tx - pad2;
+              const fy2 = ty - pad2;
+              const fw2 = dispW + pad2 * 2;
+              const fh2 = dispH + pad2 * 2;
+              const gf = scene.add.graphics();
+              try { gf.fillStyle(0xffffff, 1); gf.fillRoundedRect(fx2, fy2, fw2, fh2, 6); } catch (e) {}
+              try { gf.lineStyle(1, 0xf8f4f0, 1); gf.strokeRoundedRect(fx2, fy2, fw2, fh2, 6); } catch (e) {}
+              gf.setDepth(1199);
+              gf.setVisible(false);
+              ordersContainer.add(gf);
+              ordersContainer.tvduFrame = gf;
+            } catch (e) {}
+          } catch (e) {
+            const tvdu = scene.add.image(tx, ty, 'TVDU').setOrigin(0, 0);
+            try { tvdu.setDisplaySize(120, 120); } catch (e) {}
+            tvdu.setDepth(1200);
+            tvdu.setVisible(false);
+            ordersContainer.add(tvdu);
+            ordersContainer.tvduImage = tvdu;
+            ordersContainer._tvduDomPos = { x: tx, y: ty, w: 140, h: 140 };
+          }
+        } else {
+          const wrapperId = 'ordersTvduWrap';
+          let wrap = document.getElementById(wrapperId);
+          if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.id = wrapperId;
+            wrap.style.position = 'fixed';
+            wrap.style.zIndex = '9999';
+            wrap.style.display = 'none';
+            wrap.style.pointerEvents = 'auto';
+            // frame styling to match ShamU persistent postcard
+            wrap.style.background = '#fff';
+            wrap.style.padding = '2px';
+            wrap.style.borderRadius = '6px';
+            wrap.style.boxShadow = '0 8px 30px rgba(0,0,0,0.35)';
+            wrap.style.border = '1px solid #f8f4f0';
+            wrap.style.overflow = 'visible';
+            wrap.style.boxSizing = 'border-box';
+            const dom = document.createElement('img');
+            dom.id = 'ordersTvduImg';
+            dom.src = './assets/tvdbg.png';
+            dom.style.display = 'block';
+            dom.style.width = '100%';
+            dom.style.height = '100%';
+            dom.style.objectFit = 'contain';
+            dom.style.pointerEvents = 'auto';
+            wrap.appendChild(dom);
+            document.body.appendChild(wrap);
+          }
+          ordersContainer._tvduDomCreated = true;
+          try { window._orders_tvdu_persistent = true; } catch (e) {}
+          // default wrapper size assumes 160px image + padding/border
+          ordersContainer._tvduDomPos = { x: tx, y: ty, w: 140 + 2*2 + 1*2, h: 140 + 2*2 + 1*2 };
+          ordersContainer._tvduDom = wrap;
+          const positionDom = () => {
+            try {
+              const canvas = scene.sys.game && scene.sys.game.canvas ? scene.sys.game.canvas : document.querySelector('#game-container canvas');
+              if (!canvas) return;
+              const rect = canvas.getBoundingClientRect();
+              const scaleX = canvas.clientWidth / (scene.sys.game.config.width || canvas.width || 1);
+              const scaleY = canvas.clientHeight / (scene.sys.game.config.height || canvas.height || 1);
+              const worldX = (ordersContainer.x || 0) + (ordersContainer._tvduDomPos.x || 0);
+              const worldY = (ordersContainer.y || 0) + (ordersContainer._tvduDomPos.y || 0);
+              const left = Math.round(rect.left + worldX * scaleX);
+              const top = Math.round(rect.top + worldY * scaleY);
+              wrap.style.left = left + 'px';
+              wrap.style.top = top + 'px';
+              wrap.style.width = Math.round((ordersContainer._tvduDomPos.w || 112) * scaleX) + 'px';
+              wrap.style.height = Math.round((ordersContainer._tvduDomPos.h || 112) * scaleY) + 'px';
+            } catch (e) {}
+          };
+          try { positionDom(); } catch (e) {}
+          try { window.addEventListener('resize', positionDom); } catch (e) {}
+          // size wrapper to the natural image dimensions to avoid cropping
+          try {
+            const MAX_BADGE = 140;
+            const imgEl = wrap.querySelector('img#ordersTvduImg');
+            if (imgEl) {
+              const finalize = (iw, ih) => {
+                const PAD = 2;
+                const BORDER = 1;
+                const scale = Math.min(1, MAX_BADGE / Math.max(iw || 1, ih || 1));
+                const imgW = Math.max(1, Math.round(iw * scale));
+                const imgH = Math.max(1, Math.round(ih * scale));
+                const wrapperW = imgW + PAD * 2 + BORDER * 2;
+                const wrapperH = imgH + PAD * 2 + BORDER * 2;
+                wrap.style.width = wrapperW + 'px';
+                wrap.style.height = wrapperH + 'px';
+                ordersContainer._tvduDomPos.w = wrapperW;
+                ordersContainer._tvduDomPos.h = wrapperH;
+                try { positionDom(); } catch (e) {}
+              };
+              if (imgEl.complete && imgEl.naturalWidth) {
+                finalize(imgEl.naturalWidth, imgEl.naturalHeight);
+              } else {
+                imgEl.addEventListener('load', () => {
+                  try { finalize(imgEl.naturalWidth || imgEl.width || MAX_BADGE, imgEl.naturalHeight || imgEl.height || MAX_BADGE); } catch (e) {}
+                }, { once: true });
+              }
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+  // add VDD badge (appears when unlocked via Callisto serve or PenelopeReturn finish)
+  try {
+    if (!ordersContainer.vddImage && !ordersContainer._vddDomCreated) {
+  // move VDD further right and make it larger
+  const vx = (ordersContainer._panelW || ORDERS_PANEL_W) - 360; // closer to right edge
+      const vy = 200; // moved down 80px
+      try {
+        const hasTex = scene.textures && scene.textures.exists && scene.textures.exists('VDD');
+        let texHasImage = false;
+        if (hasTex) {
+          try { const tex = scene.textures.get('VDD'); texHasImage = !!(tex && tex.source && tex.source[0] && tex.source[0].image && tex.source[0].image.width); } catch (e) { texHasImage = false; }
+        }
+        if (hasTex && texHasImage) {
+          try {
+            const MAX_BADGE = 200; // larger badge for VDD (allow upscaling)
+            const tex = scene.textures.get('VDD');
+            const srcImg = tex && tex.source && tex.source[0] && tex.source[0].image ? tex.source[0].image : null;
+            const imgW = (srcImg && srcImg.width) ? srcImg.width : 140;
+            const imgH = (srcImg && srcImg.height) ? srcImg.height : 140;
+            // allow upscaling for small source images but cap at 2x to avoid excessive enlargement
+            const scale = Math.min(2, MAX_BADGE / Math.max(imgW || 1, imgH || 1));
+            const dispW = Math.max(1, Math.round(imgW * scale));
+            const dispH = Math.max(1, Math.round(imgH * scale));
+            // thin frame
+            try {
+              const pad = 4;
+              const fx = vx - pad;
+              const fy = vy - pad;
+              const fw = dispW + pad * 2;
+              const fh = dispH + pad * 2;
+              const f = scene.add.graphics();
+              try { f.fillStyle(0xffffff, 1); f.fillRoundedRect(fx, fy, fw, fh, 6); } catch (e) {}
+              try { f.lineStyle(1, 0xf8f4f0, 1); f.strokeRoundedRect(fx, fy, fw, fh, 6); } catch (e) {}
+              f.setDepth(1199);
+              f.setVisible(false);
+              ordersContainer.add(f);
+              ordersContainer.vddFrame = f;
+            } catch (e) {}
+            const vimg = scene.add.image(vx, vy, 'VDD').setOrigin(0,0);
+            try { vimg.setDisplaySize(dispW, dispH); } catch (e) {}
+            vimg.setDepth(1200);
+            vimg.setVisible(false);
+            ordersContainer.add(vimg);
+            ordersContainer.vddImage = vimg;
+            ordersContainer._vddDomPos = { x: vx, y: vy, w: dispW, h: dispH };
+          } catch (e) {
+            const vimg = scene.add.image(vx, vy, 'VDD').setOrigin(0,0);
+            try { vimg.setDisplaySize(200,200); } catch (e) {}
+            vimg.setDepth(1200);
+            vimg.setVisible(false);
+            ordersContainer.add(vimg);
+            ordersContainer.vddImage = vimg;
+            ordersContainer._vddDomPos = { x: vx, y: vy, w: 200, h: 200 };
+          }
+        } else {
+          const wrapperId = 'ordersVddWrap';
+          let wrap = document.getElementById(wrapperId);
+          if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.id = wrapperId;
+            wrap.style.position = 'fixed';
+            wrap.style.zIndex = '9999';
+            wrap.style.display = 'none';
+            wrap.style.pointerEvents = 'auto';
+            wrap.style.background = '#fff';
+            wrap.style.padding = '2px';
+            wrap.style.borderRadius = '6px';
+            wrap.style.boxShadow = '0 8px 30px rgba(0,0,0,0.35)';
+            wrap.style.border = '1px solid #f8f4f0';
+            wrap.style.overflow = 'visible';
+            wrap.style.boxSizing = 'border-box';
+            const dom = document.createElement('img');
+            dom.id = 'ordersVddImg';
+            dom.src = './assets/VDD.png';
+            dom.style.display = 'block';
+            dom.style.width = '100%';
+            dom.style.height = '100%';
+            dom.style.objectFit = 'contain';
+            dom.style.pointerEvents = 'auto';
+            wrap.appendChild(dom);
+            document.body.appendChild(wrap);
+          }
+          ordersContainer._vddDomCreated = true;
+          try { window._orders_vdd_persistent = true; } catch (e) {}
+          // default wrapper size assumes 200px image + padding/border
+          ordersContainer._vddDomPos = { x: vx, y: vy, w: 200 + 2*2 + 1*2, h: 200 + 2*2 + 1*2 };
+          ordersContainer._vddDom = wrap;
+          const positionDom = () => {
+            try {
+              const canvas = scene.sys.game && scene.sys.game.canvas ? scene.sys.game.canvas : document.querySelector('#game-container canvas');
+              if (!canvas) return;
+              const rect = canvas.getBoundingClientRect();
+              const scaleX = canvas.clientWidth / (scene.sys.game.config.width || canvas.width || 1);
+              const scaleY = canvas.clientHeight / (scene.sys.game.config.height || canvas.height || 1);
+              const worldX = (ordersContainer.x || 0) + (ordersContainer._vddDomPos.x || 0);
+              const worldY = (ordersContainer.y || 0) + (ordersContainer._vddDomPos.y || 0);
+              const left = Math.round(rect.left + worldX * scaleX);
+              const top = Math.round(rect.top + worldY * scaleY);
+              wrap.style.left = left + 'px';
+              wrap.style.top = top + 'px';
+              wrap.style.width = Math.round((ordersContainer._vddDomPos.w || 112) * scaleX) + 'px';
+              wrap.style.height = Math.round((ordersContainer._vddDomPos.h || 112) * scaleY) + 'px';
+            } catch (e) {}
+          };
+          try { positionDom(); } catch (e) {}
+          try { window.addEventListener('resize', positionDom); } catch (e) {}
+          try {
+            const MAX_BADGE = 200; // match in-canvas target and allow upscaling
+            const imgEl = wrap.querySelector('img#ordersVddImg');
+            if (imgEl) {
+              const finalize = (iw, ih) => {
+                const PAD = 2;
+                const BORDER = 1;
+                // allow upscaling up to 2x for DOM fallback as well
+                const scale = Math.min(2, MAX_BADGE / Math.max(iw || 1, ih || 1));
+                const imgW = Math.max(1, Math.round(iw * scale));
+                const imgH = Math.max(1, Math.round(ih * scale));
+                const wrapperW = imgW + PAD * 2 + BORDER * 2;
+                const wrapperH = imgH + PAD * 2 + BORDER * 2;
+                wrap.style.width = wrapperW + 'px';
+                wrap.style.height = wrapperH + 'px';
+                ordersContainer._vddDomPos.w = wrapperW;
+                ordersContainer._vddDomPos.h = wrapperH;
+                try { positionDom(); } catch (e) {}
+              };
+              if (imgEl.complete && imgEl.naturalWidth) {
+                finalize(imgEl.naturalWidth, imgEl.naturalHeight);
+              } else {
+                imgEl.addEventListener('load', () => { try { finalize(imgEl.naturalWidth || imgEl.width || MAX_BADGE, imgEl.naturalHeight || imgEl.height || MAX_BADGE); } catch (e) {} }, { once: true });
+              }
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
 }
 
 function createShopUI(scene) {
@@ -3124,6 +4510,11 @@ function showShopScreen(scene) {
   if (cupSprites.infoText) cupSprites.infoText.setVisible(false);
   if (receiptContainer) receiptContainer.setVisible(false);
   try { const d = document.getElementById('domCustomerImg'); if (d) d.style.display = 'none'; } catch (e) {}
+  // ensure OTHU visuals are hidden when not on Orders
+  try { if (ordersContainer && ordersContainer.othuImage) ordersContainer.othuImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.othuFrame) ordersContainer.othuFrame.setVisible(false); } catch (e) {}
+  try { const od = ordersContainer && ordersContainer._othuDom; if (od && !(window && window._orders_othu_persistent)) od.style.display = 'none'; } catch (e) {}
+  try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 function removeCustomer(scene) {
@@ -3168,7 +4559,17 @@ function refreshOrdersUI(scene) {
     // show a name tag for special, story characters, or the villain (Vera Chai)
     try {
       const key = (o && o.appearance && o.appearance.imageKey) ? o.appearance.imageKey : null;
-  const specialKeys = ['Lucas','Nathan','Haley','Peyton','Brooke','Stefan','Damon','Elena','Caroline','Bonnie','Callisto'];
+      // base known special keys (OTH/TVD)
+      let specialKeys = ['Lucas','Nathan','Haley','Peyton','Brooke','Stefan','Damon','Elena','Caroline','Bonnie','Callisto'];
+      try {
+        // also treat story character imageKeys (e.g. Penelope) as specials for name-tag display
+        if (Array.isArray(storyCharacters)) {
+          const sk = storyCharacters.map(s => s.imageKey).filter(Boolean);
+          specialKeys = specialKeys.concat(sk);
+        }
+      } catch (e) {}
+      // dedupe
+      specialKeys = Array.from(new Set(specialKeys));
       const isSpecial = key && specialKeys.indexOf(key) !== -1;
       const isStoryChar = !!(o && o._isStory);
       const mustShow = (key === 'villain') || isSpecial || isStoryChar;
@@ -3249,9 +4650,18 @@ function refreshOrdersUI(scene) {
   if (o && o._isStory && o._storyData && !o._storyShown && o._scheduledDay === dayNumber && o.appearance && o.appearance.imageKey === o._storyData.imageKey) {
         try { o._storyShown = true; } catch (e) {}
         try { setVillainDialogue(o._storyData.dialogue, scene); villainDialogueOwnerImageKey = o.appearance.imageKey || null; } catch (e) {}
+        try { villainDialogueOwnerStoryKey = (o._storyData && o._storyData.key) ? o._storyData.key : null; } catch (e) {}
+        try {
+          // only set the pending-unlock flag when this is Penelope's return dialogue (the second one)
+          pendingUnlockVDDOnStoryEnd = (villainDialogueOwnerStoryKey === 'PenelopeReturn');
+        } catch (e) { pendingUnlockVDDOnStoryEnd = false; }
       }
     } catch (e) {}
   } catch (e) {}
+  // ensure OTHU badge visibility is updated whenever the Orders UI refreshes
+  try { if (typeof updateOTHUVisibility === 'function') updateOTHUVisibility(); } catch (e) {}
+  try { if (typeof updateTVDUVisibility === 'function') updateTVDUVisibility(); } catch (e) {}
+  try { if (typeof updateVDDVisibility === 'function') updateVDDVisibility(); } catch (e) {}
   // If a dialogue sequence is active, show the current line in the bubble and allow click-to-advance
   // If a dialogue is active but the activeOrder avatar no longer matches the owner, stop it
   try {
@@ -3600,12 +5010,42 @@ function advanceVillainDialogue(scene) {
       customersEnabled = true;
   // mark the story/dialogue owner as collected when the sequence finishes
   try { if (villainDialogueOwnerImageKey) { try { markCharacterCollected(villainDialogueOwnerImageKey); } catch (e) {} } } catch (e) {}
-  activeOrder = generateRandomOrder();
-      try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
-      refreshOrdersUI(scene);
-      // also restore DOM avatar visibility
-      try { const d = document.getElementById('domCustomerImg'); if (d && currentScreen === 'orders') d.style.display = 'block'; } catch (e) {}
-      return;
+            // If the finished story was Carl2 (day 33), show ShamU.png after the dialogue before resuming
+            try {
+              const isCarl2 = (dayNumber >= 33 && String(villainDialogueOwnerImageKey || '').toLowerCase().indexOf('carl') !== -1);
+              if (isCarl2) {
+                try {
+                  // ensure Orders UI is visible, then show ShamU permanently (non-closing overlay)
+                  try { showOrdersScreen(scene); } catch (e) {}
+                  try { showPersistentImage('ShamU.png'); } catch (e) {}
+                  if (typeof window !== 'undefined' && window._boba_enablePetNav) {
+                    try { window._boba_enablePetNav(); } catch (e) {}
+                  }
+                  // resume normal flow
+                  activeOrder = generateRandomOrder();
+                  try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
+                  try { refreshOrdersUI(scene); } catch (e) {}
+                  // also restore DOM avatar visibility
+                  try { const d = document.getElementById('domCustomerImg'); if (d && currentScreen === 'orders') d.style.display = 'block'; } catch (e) {}
+                } catch (e) {}
+                return;
+              }
+            } catch (e) {}
+            // otherwise continue as before
+      // Unlock VDD only if we explicitly set the pending unlock for PenelopeReturn
+      try {
+        if (pendingUnlockVDDOnStoryEnd) {
+          vddPenelopeReturnCompleted = true;
+          pendingUnlockVDDOnStoryEnd = false;
+          try { ensureVddUnlockedIfReady(); } catch (e) {}
+        }
+      } catch (e) {}
+      activeOrder = generateRandomOrder();
+          try { if (activeOrder) activeOrder._animated = false; } catch (e) {}
+          refreshOrdersUI(scene);
+          // also restore DOM avatar visibility
+          try { const d = document.getElementById('domCustomerImg'); if (d && currentScreen === 'orders') d.style.display = 'block'; } catch (e) {}
+          return;
     }
     try { refreshOrdersUI(scene); } catch (e) {}
   } catch (e) {}
@@ -3616,6 +5056,8 @@ function showOrdersScreen(scene) {
   // ensure collection overlay is hidden and restore page background
   try { hideCollectionScreen(); hidePetScreen(); document.body.style.backgroundImage = "url('./assets/Background.png')"; } catch (e) {}
   ordersContainer.setVisible(true);
+  // ensure persistent postcard (ShamU) is visible when Orders is active
+  try { const p = document.getElementById('persistentImageOverlay'); if (p) p.style.display = 'block'; } catch (e) {}
   // hide maker UI (container and controls): we'll hide uiGroup for simplicity
   uiGroup.getChildren().forEach(ch => ch.setVisible(false));
   cupSprites.container.setVisible(false);
@@ -3624,6 +5066,7 @@ function showOrdersScreen(scene) {
   if (receiptContainer) receiptContainer.setVisible(false);
   // ensure DOM customer image is visible and positioned
   try { createDomCustomerImg(); positionDomCustomerImg(scene); const d = document.getElementById('domCustomerImg'); if (d) d.style.display = 'block'; } catch (e) {}
+  try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 function showMakerScreen(scene) {
@@ -3636,10 +5079,17 @@ function showMakerScreen(scene) {
   if (shopContainer) shopContainer.setVisible(false);
   // restore the cup info text when returning to Maker
   if (cupSprites.infoText) cupSprites.infoText.setVisible(true);
+  // hide any persistent postcard overlay when leaving Orders
+  try { const p = document.getElementById('persistentImageOverlay'); if (p) p.style.display = 'none'; } catch (e) {}
+  // ensure OTHU visuals are hidden when not on Orders
+  try { if (ordersContainer && ordersContainer.othuImage) ordersContainer.othuImage.setVisible(false); } catch (e) {}
+  try { if (ordersContainer && ordersContainer.othuFrame) ordersContainer.othuFrame.setVisible(false); } catch (e) {}
+  try { const od = ordersContainer && ordersContainer._othuDom; if (od && !(window && window._orders_othu_persistent)) od.style.display = 'none'; } catch (e) {}
   // update receipt to reflect the loaded order if present, otherwise the active customer order
   updateReceipt(scene, currentOrderInMaker || activeOrder);
   // hide DOM customer image when not in Orders
   try { const d = document.getElementById('domCustomerImg'); if (d) d.style.display = 'none'; } catch (e) {}
+  try { ensureOrdersBadgesVisibility(); } catch (e) {}
 }
 
 function loadOrderIntoMaker(scene, order) {
@@ -3758,7 +5208,8 @@ function createDomNavButtons() {
   wrap.style.position = 'fixed';
   wrap.style.left = '50%';
   // position a bit higher when buttons are larger
-  wrap.style.bottom = '25px';
+  // nudge DOM nav lower so it doesn't overlap Maker UI elements when overlays are shown
+  wrap.style.bottom = (25 + makerYOffset) + 'px';
   wrap.style.transform = 'translateX(-50%)';
   wrap.style.display = 'flex';
   // match the in-canvas nav spacing
@@ -3836,7 +5287,11 @@ function createDomNavButtons() {
   wrap.appendChild(make('Make', '#9bd67a', (s) => showMakerScreen(s)));
   wrap.appendChild(make('Orders', '#5daee8', (s) => showOrdersScreen(s)));
   wrap.appendChild(make('Collection', '#d39be8', (s) => showCollectionScreen(s)));
-  wrap.appendChild(make('Pet', '#f2a6d9', (s) => showPetScreen(s)));
+  // create Pet DOM nav button and keep a reference so we can enable it later when unlocked
+  const petDomBtn = make('Pet', '#f2a6d9', (s) => { try { if (!petUnlocked) return; showPetScreen(s); } catch (e) {} });
+  wrap.appendChild(petDomBtn);
+  try { window._boba_petDomNavBtn = petDomBtn; } catch (e) {}
+  try { if (!petUnlocked) { petDomBtn.style.opacity = '0.45'; petDomBtn.style.pointerEvents = 'none'; petDomBtn.style.cursor = 'default'; } } catch (e) {}
   document.body.appendChild(wrap);
 }
 
@@ -3907,11 +5362,11 @@ function positionDomCustomerImg(scene) {
           finalW = Math.floor(w * 1.4);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + elenaDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + elenaDomOffsetY) * scale);
-        } else if (key === 'Caroline' || key === 'caroline' || key === 'cf.png') {
+        } else if (key === 'Caroline' || key === 'caroline' || key === 'Carol.png') {
           // Caroline: larger and nudged left
-          const carolineDomOffsetX = -120;
-          const carolineDomOffsetY = 30;
-          finalW = Math.floor(w * 1.3);
+          const carolineDomOffsetX = -60;
+          const carolineDomOffsetY = 0;
+          finalW = Math.floor(w * 0.85);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + carolineDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + carolineDomOffsetY) * scale);
         } else if (key === 'Brooke' || key === 'brooke' || key === 'brooke.png') {
@@ -3921,18 +5376,18 @@ function positionDomCustomerImg(scene) {
           finalW = Math.floor(w * 1.6);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + brookeDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + brookeDomOffsetY) * scale);
-        } else if (key === 'Damon' || key === 'damon' || key === 'damon.png') {
+        } else if (key === 'Damon' || key === 'damon' || key === 'Damon1.png') {
           // Damon: larger and nudged left
-          const damonDomOffsetX = -150;
-          const damonDomOffsetY = -20;
-          finalW = Math.floor(w * 1.5);
+          const damonDomOffsetX = -100;
+          const damonDomOffsetY = -50;
+          finalW = Math.floor(w * 1.1);file:///home/qwerty/boba/index.html
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + damonDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + damonDomOffsetY) * scale);
-        } else if (key === 'Stefan' || key === 'stefan' || key === 'Stefan.png') {
+        } else if (key === 'Stefan' || key === 'stefan' || key === 'St.png') {
           // Stefan: larger and nudged left
-          const stefanDomOffsetX = -160;
-          const stefanDomOffsetY = -20;
-          finalW = Math.floor(w * 1.6);
+          const stefanDomOffsetX = -170;
+          const stefanDomOffsetY = -40;
+          finalW = Math.floor(w * 1.4);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + stefanDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + stefanDomOffsetY) * scale);
         } else if (key === 'Haley' || key === 'haley' || key === 'Halez.png') {
@@ -3974,7 +5429,7 @@ function positionDomCustomerImg(scene) {
           // Callisto: larger and nudged left
           const callistoDomOffsetX = -70;
           const callistoDomOffsetY = -20;
-          finalW = Math.floor(w * 1.05);
+          finalW = Math.floor(w * 1);
           finalLeft = px + Math.floor((domCustomerOffsetX + 40 + callistoDomOffsetX) * scale);
           finalTop = py + Math.floor((domCustomerOffsetY + callistoDomOffsetY) * scale);
         } else if (key === 'Ian' || key === 'ian' || key === 'Ia1.png') {
@@ -4151,6 +5606,53 @@ function showPlainImage(filename, onClick) {
 
     wrap.addEventListener('click', close, { once: true });
     imgEl.addEventListener('click', close, { once: true });
+  } catch (e) {}
+}
+
+// Show a persistent image overlay (no close on click). Useful for permanent postcards that should remain visible.
+function showPersistentImage(filename) {
+  try {
+  if (!filename) return;
+  // ShamU.png should only appear in the Orders screen
+  try { if ((filename === 'ShamU.png' || filename === 'Shameless' || filename === 'ShamU' || filename.indexOf('ShamU')!==-1) && typeof currentScreen !== 'undefined' && currentScreen !== 'orders') return; } catch (e) {}
+    try { const old = document.getElementById('persistentImageOverlay'); if (old) old.remove(); } catch (e) {}
+    const wrap = document.createElement('div');
+    wrap.id = 'persistentImageOverlay';
+    wrap.style.position = 'fixed';
+  // move left by a lot (increase right) and move up slightly (increase bottom)
+  // ShamU should be nudged slightly to the right compared to default persistent images
+  try {
+    if (filename && (filename === 'ShamU.png' || filename.indexOf('ShamU') !== -1 || filename === 'Shameless' || filename === 'ShamU')) {
+  // nudge ShamU further left and up
+  wrap.style.right = '1450px';
+  wrap.style.bottom = '350px';
+    } else {
+      wrap.style.right = '1450px';
+      wrap.style.bottom = '350px';
+    }
+  } catch (e) {
+    wrap.style.right = '1450px';
+    wrap.style.bottom = '350px';
+  }
+    wrap.style.zIndex = '99999';
+    wrap.style.pointerEvents = 'auto';
+    wrap.style.boxSizing = 'border-box';
+    // create a small framed look so it reads like a pinned postcard
+    wrap.style.background = '#fff';
+    wrap.style.padding = '8px';
+    wrap.style.borderRadius = '6px';
+    wrap.style.boxShadow = '0 8px 30px rgba(0,0,0,0.35)';
+  wrap.style.border = '2px solid #f8f4f0';
+    const img = document.createElement('img');
+    img.src = './assets/' + filename;
+    img.style.display = 'block';
+    img.style.width = 'auto';
+    img.style.height = 'auto';
+  img.style.maxWidth = '180px';
+  img.style.maxHeight = '180px';
+    img.style.objectFit = 'contain';
+    wrap.appendChild(img);
+    document.body.appendChild(wrap);
   } catch (e) {}
 }
 
